@@ -1,9 +1,11 @@
 symbol: ETHUSDT
 exchange: binance
-historical_days: 365
+# Download/retain a fixed number of candles per timeframe.
+# This is intentionally used instead of a calendar-day range so small
+# timeframes remain practical to download and process.
+historical_candles: 30000
 database: data/eth_market.db
 
-# Binance kline intervals supported by this project
 timeframes:
   - 1m
   - 3m
