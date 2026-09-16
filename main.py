@@ -70,8 +70,11 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "init":
         cmd_init()
-    elif args.command in {"download", "update"}:
-        cmd_download(args.days if args.command == "download" else 0)
+    elif args.command == "download":
+        cmd_download(args.days)
+    elif args.command == "update":
+        # If the DB is empty, this naturally performs the configured initial history load.
+        cmd_download(None)
     elif args.command == "scan":
         cmd_scan()
 
