@@ -42,7 +42,7 @@ class LiveConfig:
 class Config:
     symbol: str = "ETHUSDT"
     exchange: str = "binance"
-    historical_days: int = 365
+    historical_candles: int = 30_000
     database: str = "data/eth_market.db"
     timeframes: list[str] = field(default_factory=lambda: ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"])
     pattern: PatternConfig = field(default_factory=PatternConfig)
@@ -59,10 +59,11 @@ def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
 
 def load_config(path: str | Path = "config.yaml") -> Config:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    candles = raw.get("historical_candles", 30_000)
     return Config(
         symbol=str(raw.get("symbol", "ETHUSDT")),
         exchange=str(raw.get("exchange", "binance")),
-        historical_days=int(raw.get("historical_days", 365)),
+        historical_candles=int(candles),
         database=str(raw.get("database", "data/eth_market.db")),
         timeframes=list(raw.get("timeframes", Config().timeframes)),
         pattern=PatternConfig(**_section(raw, "pattern")),
