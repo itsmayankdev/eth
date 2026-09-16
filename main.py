@@ -23,14 +23,18 @@ def cmd_init() -> None:
     console.print(f"[green]Database ready:[/green] {cfg.database}")
 
 
-def cmd_download(days: int | None) -> None:
+def cmd_download(candles: int | None) -> None:
     cfg = load_config()
     db = MarketDatabase(cfg.database)
     client = BinanceClient()
+    target = candles if candles is not None else cfg.historical_candles
+    if target <= 0:
+        raise ValueError("candles must be greater than 0")
+
     table = Table("Timeframe", "Rows added", "Last candle")
     for tf in cfg.timeframes:
         try:
-            added = download_timeframe(db, client, cfg.symbol, tf, days or cfg.historical_days)
+            added = download_timeframe(db, client, cfg.symbol, tf, target)
             last = db.last_open_time(cfg.symbol, tf)
             table.add_row(tf, str(added), str(last or "-"))
         except Exception as exc:
@@ -64,16 +68,22 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init")
     p_download = sub.add_parser("download")
-    p_download.add_argument("--days", type=int, default=None)
+    p_download.add_argument(
+        "--candles",
+        type=int,
+        default=None,
+        help="Historical closed candles to load on an empty timeframe (default: config value)",
+    )
     sub.add_parser("update")
     sub.add_parser("scan")
     args = parser.parse_args()
     if args.command == "init":
         cmd_init()
     elif args.command == "download":
-        cmd_download(args.days)
+        cmd_download(args.candles)
     elif args.command == "update":
-        # If the DB is empty, this naturally performs the configured initial history load.
+        # Empty timeframes receive the configured initial history; existing
+        # timeframes receive only candles after their latest stored candle.
         cmd_download(None)
     elif args.command == "scan":
         cmd_scan()
