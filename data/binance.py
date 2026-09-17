@@ -18,6 +18,10 @@ class BinanceClient:
         self.timeout = timeout
 
     def fetch_klines(self, symbol: str, interval: str, start_ms: int, end_ms: int | None = None, limit: int = 1000) -> list[list[Any]]:
+        # Binance rejects negative timestamps. For very long requests (notably
+        # 1d/4h), the requested history can pre-date the Unix epoch; clamping to
+        # zero lets the API return the earliest available candles for the symbol.
+        start_ms = max(0, int(start_ms))
         params: dict[str, Any] = {"symbol": symbol, "interval": interval, "startTime": start_ms, "limit": min(limit, 1000)}
         if end_ms is not None:
             params["endTime"] = end_ms
@@ -30,7 +34,7 @@ class BinanceClient:
         if interval not in INTERVAL_MS:
             raise ValueError(f"Unsupported Binance interval: {interval}")
         rows: list[list[Any]] = []
-        cursor = start_ms
+        cursor = max(0, int(start_ms))
         step = INTERVAL_MS[interval]
         target = max_candles if max_candles is not None else float("inf")
         while cursor <= end_ms and len(rows) < target:
