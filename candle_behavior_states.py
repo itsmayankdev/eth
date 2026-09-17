@@ -6,6 +6,7 @@ analysis. It describes OHLC candle anatomy and sequence transitions.
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -170,6 +171,20 @@ def plot_state_matrix(named_windows: list[tuple[str, pd.DataFrame]], path: Path)
     plt.close(fig)
 
 
+def clean_charts(charts: Path) -> int:
+    """Remove all previous research artifacts so each run starts clean."""
+    charts.mkdir(exist_ok=True)
+    removed = 0
+    for item in charts.iterdir():
+        if item.is_file() or item.is_symlink():
+            item.unlink()
+            removed += 1
+        elif item.is_dir():
+            shutil.rmtree(item)
+            removed += 1
+    return removed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Descriptive candle behaviour state research")
     parser.add_argument("--timeframe", default="1h")
@@ -215,11 +230,8 @@ def main() -> None:
         context_rows.append({"rank": rank, "similarity": float(item["similarity"]), "before_profile": summarize(before).get("transition_profile", "NONE"), "matched_profile": s["transition_profile"], "after_profile": summarize(after).get("transition_profile", "NONE"), "before_bullish": float((before["direction"] > 0).mean()) if len(before) else np.nan, "matched_bullish": float((hist["direction"] > 0).mean()), "after_bullish": float((after["direction"] > 0).mean()) if len(after) else np.nan, "before_range": float(before["range_ratio"].mean()) if len(before) else np.nan, "matched_range": float(hist["range_ratio"].mean()), "after_range": float(after["range_ratio"].mean()) if len(after) else np.nan})
 
     charts = Path("charts")
-    charts.mkdir(exist_ok=True)
-    for filename in ["candle_behavior_state_matrix.png", "candle_behavior_state_summary.csv", "candle_behavior_state_sequences.csv", "candle_behavior_state_context.csv"]:
-        old = charts / filename
-        if old.exists():
-            old.unlink()
+    removed = clean_charts(charts)
+    print(f"\nCleaned charts/: removed {removed} previous artifact(s).")
     pd.DataFrame(summary_rows).to_csv(charts / "candle_behavior_state_summary.csv", index=False)
     pd.DataFrame(sequence_rows).to_csv(charts / "candle_behavior_state_sequences.csv", index=False)
     pd.DataFrame(context_rows).to_csv(charts / "candle_behavior_state_context.csv", index=False)
