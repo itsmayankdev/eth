@@ -6,7 +6,7 @@ from statistics import NormalDist
 import numpy as np
 import pandas as pd
 
-from analysis.outcomes import OutcomeConfig, evaluate_matches, summarize_outcomes
+from analysis.outcomes import OutcomeConfig, evaluate_matches, measure_match_outcome, summarize_outcomes
 from structure.similarity import find_similar_structures_at
 
 
@@ -150,3 +150,114 @@ def evaluate_walk_forward(
     result = pd.concat(all_matches, ignore_index=True)
     summary = summarize_outcomes_with_ci(result, cfg.horizons)
     return result, summary
+
+
+def evaluate_endpoint_baseline(
+    structure: pd.DataFrame,
+    candles: pd.DataFrame,
+    evaluation_endpoint_positions: list[int],
+    outcome_config: OutcomeConfig,
+) -> pd.DataFrame:
+    """Measure the actual forward outcome at each evaluation endpoint.
+
+    This is the no-matching baseline: one trade per evaluation endpoint,
+    entered at that endpoint's confirmation close and using the same barriers
+    and horizons as the historical-match evaluation.
+    """
+    closes = pd.to_numeric(candles["close"], errors="coerce").to_numpy(float)
+    rows: list[dict] = []
+    for pos in evaluation_endpoint_positions:
+        if pos < 0 or pos >= len(structure):
+            continue
+        confirmation = int(structure.iloc[pos]["confirmation_index"])
+        if confirmation < 0 or confirmation >= len(closes) or not np.isfinite(closes[confirmation]):
+            continue
+        outcome = measure_match_outcome(
+            candles,
+            confirmation,
+            float(closes[confirmation]),
+            outcome_config.horizons,
+            outcome_config.target_pct,
+            outcome_config.stop_pct,
+        )
+        outcome["evaluation_endpoint_position"] = pos
+        outcome["evaluation_endpoint_index"] = int(structure.iloc[pos]["index"])
+        outcome["entry_index"] = confirmation
+        rows.append(outcome)
+    return pd.DataFrame(rows)
+
+
+def deoverlap_outcomes(
+    outcomes: pd.DataFrame,
+    max_horizon: int,
+) -> pd.DataFrame:
+    """Keep a non-overlapping subset based on entry candles.
+
+    Rows are ordered by entry time. Once an outcome is kept, another row is
+    accepted only when its entry candle is at least ``max_horizon`` candles
+    later. This removes repeated/overlapping forward windows from aggregate
+    statistics without using future outcome information to select rows.
+    """
+    if outcomes.empty or max_horizon <= 0 or "entry_index" not in outcomes.columns:
+        return outcomes.copy()
+    ordered = outcomes.sort_values(["entry_index", "evaluation_endpoint_position", "similarity"], ascending=[True, True, False])
+    keep: list[int] = []
+    last_entry = -10**18
+    for idx, row in ordered.iterrows():
+        entry = int(row["entry_index"])
+        if entry - last_entry >= max_horizon:
+            keep.append(idx)
+            last_entry = entry
+    return ordered.loc[keep].reset_index(drop=True)
+
+
+def summarize_similarity_buckets(
+    outcomes: pd.DataFrame,
+    horizons: tuple[int, ...],
+    confidence_level: float = 0.95,
+    bins: tuple[float, ...] = (0.70, 0.75, 0.80, 0.85, 1.01),
+) -> pd.DataFrame:
+    """Summarize outcomes by similarity range to test whether strength matters."""
+    if outcomes.empty or "similarity" not in outcomes.columns:
+        return pd.DataFrame()
+    labels = [f"{bins[i]:.2f}–{bins[i + 1]:.2f}" for i in range(len(bins) - 1)]
+    work = outcomes.copy()
+    work["similarity_bucket"] = pd.cut(
+        pd.to_numeric(work["similarity"], errors="coerce"),
+        bins=list(bins),
+        labels=labels,
+        right=False,
+        include_lowest=True,
+    )
+    rows: list[dict] = []
+    for label in labels:
+        bucket = work[work["similarity_bucket"] == label]
+        if bucket.empty:
+            continue
+        for h in horizons:
+            col = f"target_first_{int(h)}"
+            if col not in bucket:
+                continue
+            values = bucket[col].dropna().astype(str)
+            decisive = values[values.isin(["target", "stop"])]
+            target = int((values == "target").sum())
+            samples = len(values)
+            d_n = len(decisive)
+            lo, hi = wilson_interval(target, samples, confidence_level)
+            d_lo, d_hi = wilson_interval(target, d_n, confidence_level)
+            rows.append({
+                "similarity_bucket": label,
+                "horizon": int(h),
+                "samples": samples,
+                "target": target,
+                "stop": int((values == "stop").sum()),
+                "neither": int((values == "neither").sum()),
+                "ambiguous": int((values == "ambiguous").sum()),
+                "target_rate_all": target / samples if samples else np.nan,
+                "target_rate_all_lower": lo,
+                "target_rate_all_upper": hi,
+                "target_rate_decisive": target / d_n if d_n else np.nan,
+                "target_rate_decisive_lower": d_lo,
+                "target_rate_decisive_upper": d_hi,
+            })
+    return pd.DataFrame(rows)
