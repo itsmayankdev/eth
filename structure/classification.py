@@ -6,15 +6,27 @@ import pandas as pd
 def classify_swings(turns: pd.DataFrame) -> pd.DataFrame:
     """Classify confirmed ZigZag pivots as HH, HL, LH, or LL.
 
-    The existing ZigZag output labels each confirmed pivot by the direction of
-    the reversal that confirmed it.  We therefore derive the pivot type from
-    the pivot's own direction: DOWN pivots are swing highs and UP pivots are
-    swing lows.  Each pivot is compared only with the previous pivot of the
-    same type, avoiding comparisons between highs and lows.
+    The ZigZag output labels each pivot by the direction of the reversal that
+    confirmed it. ``DOWN`` marks a swing high and ``UP`` marks a swing low.
+    The confirmation index is preserved so causal evaluation knows when the
+    pivot became observable.
     """
-    columns = ["index", "direction", "price", "pivot_type", "previous_same_type_price", "swing_pct"]
+    columns = [
+        "index",
+        "confirmation_index",
+        "direction",
+        "price",
+        "pivot_type",
+        "previous_same_type_price",
+        "swing_pct",
+    ]
     if turns.empty:
         return pd.DataFrame(columns=columns)
+
+    required = {"index", "confirmation_index", "direction", "price"}
+    missing = sorted(required - set(turns.columns))
+    if missing:
+        raise ValueError(f"missing turning-point columns: {missing}")
 
     out = turns.copy().reset_index(drop=True)
     out["pivot_type"] = pd.NA
@@ -26,8 +38,6 @@ def classify_swings(turns: pd.DataFrame) -> pd.DataFrame:
 
     for i, row in out.iterrows():
         price = float(row["price"])
-        # In zigzag_turns.py, DOWN marks a confirmed swing high and UP marks
-        # a confirmed swing low.
         if row["direction"] == "DOWN":
             previous = last_high
             out.at[i, "previous_same_type_price"] = previous
@@ -43,4 +53,6 @@ def classify_swings(turns: pd.DataFrame) -> pd.DataFrame:
                 out.at[i, "swing_pct"] = (price / previous - 1.0) * 100.0
             last_low = price
 
+    out["index"] = out["index"].astype(int)
+    out["confirmation_index"] = out["confirmation_index"].astype(int)
     return out[columns]
