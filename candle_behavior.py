@@ -22,6 +22,14 @@ STATE_NAMES = {
     4: "rejection",
 }
 
+ANATOMY_ROWS = [
+    ("body", "body_pct"),
+    ("upper wick", "upper_wick_pct"),
+    ("lower wick", "lower_wick_pct"),
+    ("range / median", "range_vs_median"),
+    ("directional efficiency", "efficiency"),
+]
+
 
 def _candle_width(x: np.ndarray) -> float:
     if len(x) < 2:
@@ -63,10 +71,9 @@ def _prepare(candles: pd.DataFrame, window: int = 12) -> pd.DataFrame:
     out["efficiency"] = efficiency
     out["compression_ratio"] = rolling_range / baseline.replace(0, np.nan)
 
-    # Descriptive state only. It does not represent a trading signal.
     state = np.full(len(out), 1, dtype=int)
     compression = (out["compression_ratio"] < 0.75) & (out["efficiency"] < 0.35)
-    expansion = (out["range_vs_median"] > 1.5)
+    expansion = out["range_vs_median"] > 1.5
     directional = expansion & (out["efficiency"] > 0.55)
     rejection = (
         ((out["upper_wick_pct"] > 50) | (out["lower_wick_pct"] > 50))
@@ -93,92 +100,60 @@ def _plot_candles(ax, candles: pd.DataFrame, start: int, end: int) -> None:
         up = c >= o
         body_low = min(o, c)
         body_height = max(abs(c - o), 1e-9)
-        ax.vlines(x[i], l, h, linewidth=0.8)
+        ax.vlines(x[i], l, h, linewidth=0.75)
         rect = Rectangle(
             (x[i] - width / 2, body_low),
             width,
             body_height,
             fill=up,
-            linewidth=0.8,
+            linewidth=0.7,
         )
         ax.add_patch(rect)
 
 
-def _plot_behaviour_strip(ax, candles: pd.DataFrame, left: int, right: int) -> None:
-    """Show a compact categorical behaviour strip instead of noisy feature lines."""
+def _plot_anatomy_heatmap(ax, candles: pd.DataFrame, left: int, right: int) -> None:
+    frame = candles.iloc[left:right + 1]
+    values = []
+    labels = []
+    for label, column in ANATOMY_ROWS:
+        series = frame[column].astype(float).to_numpy()
+        if column in {"range_vs_median", "efficiency"}:
+            series = np.clip(series, 0, 3 if column == "range_vs_median" else 1)
+            if column == "efficiency":
+                series = series * 100.0
+            elif column == "range_vs_median":
+                series = series / 3.0 * 100.0
+        values.append(series)
+        labels.append(label)
+
+    matrix = np.nan_to_num(np.asarray(values, dtype=float), nan=0.0)
+    ax.imshow(matrix, aspect="auto", interpolation="nearest", extent=[left - 0.5, right + 0.5, -0.5, len(labels) - 0.5])
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels, fontsize=7)
+    ax.invert_yaxis()
+    ax.set_ylabel("Candle anatomy")
+    ax.set_xlim(left - 0.5, right + 0.5)
+    ax.grid(axis="x", alpha=0.08)
+
+
+def _plot_state_strip(ax, candles: pd.DataFrame, left: int, right: int) -> None:
     frame = candles.iloc[left:right + 1]
     states = frame["behaviour_state"].to_numpy(dtype=int)
     x = np.arange(left, right + 1)
-    ax.step(x, states, where="mid", linewidth=1.5)
+    ax.step(x, states, where="mid", linewidth=1.2)
     ax.set_yticks(list(STATE_NAMES))
-    ax.set_yticklabels([STATE_NAMES[i] for i in STATE_NAMES], fontsize=7)
+    ax.set_yticklabels(list(STATE_NAMES.values()), fontsize=7)
     ax.set_ylim(-0.5, 4.5)
-    ax.set_ylabel("Behaviour")
-    ax.grid(axis="x", alpha=0.12)
+    ax.set_ylabel("State")
+    ax.grid(axis="x", alpha=0.10)
 
 
-def _plot_metric_strip(ax, candles: pd.DataFrame, left: int, right: int) -> None:
-    """Show the two most useful continuous descriptors: range and efficiency."""
-    frame = candles.iloc[left:right + 1]
-    x = np.arange(left, right + 1)
-    range_ratio = frame["range_vs_median"].clip(0, 3).to_numpy(dtype=float)
-    efficiency = frame["efficiency"].clip(0, 1).to_numpy(dtype=float)
-    ax.plot(x, range_ratio, linewidth=1.0, label="range / median")
-    ax.plot(x, efficiency, linewidth=1.0, label="directional efficiency")
-    ax.axhline(1.0, linestyle="--", linewidth=0.7, alpha=0.5)
-    ax.set_ylim(0, 3)
-    ax.set_ylabel("Relative behaviour")
-    ax.legend(loc="upper right", fontsize=7)
-    ax.grid(alpha=0.12)
-
-
-def _add_state_bands(ax, candles: pd.DataFrame, left: int, right: int) -> None:
-    """Lightly mark contiguous descriptive behaviour regions on the candle chart."""
-    frame = candles.iloc[left:right + 1]
-    states = frame["behaviour_state"].to_numpy(dtype=int)
-    if len(states) == 0:
-        return
-    start = left
-    current = int(states[0])
-    for offset in range(1, len(states) + 1):
-        changed = offset == len(states) or int(states[offset]) != current
-        if not changed:
-            continue
-        end = left + offset - 1
-        alpha = {0: 0.035, 1: 0.0, 2: 0.025, 3: 0.02, 4: 0.03}.get(current, 0.0)
-        if alpha:
-            ax.axvspan(start - 0.5, end + 0.5, alpha=alpha)
-        if offset < len(states):
-            start = left + offset
-            current = int(states[offset])
-
-
-def _pivot_rows(structure: pd.DataFrame, start_pos: int, end_pos: int, candles: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for pos in range(start_pos, end_pos + 1):
-        p = structure.iloc[pos]
-        idx = int(p["index"])
-        c = candles.iloc[idx]
-        rows.append(
-            {
-                "pivot": str(p["pivot_type"]),
-                "index": idx,
-                "body": float(c["body_pct"]),
-                "upper": float(c["upper_wick_pct"]),
-                "lower": float(c["lower_wick_pct"]),
-                "range_x": float(c["range_vs_median"]),
-                "state": str(c["behaviour_name"]),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def _add_pivot_markers(ax, structure: pd.DataFrame, candles: pd.DataFrame, start_pos: int, end_pos: int) -> None:
+def _add_pivot_markers(ax, structure: pd.DataFrame, start_pos: int, end_pos: int) -> None:
     pivots = structure.iloc[start_pos:end_pos + 1]
     for _, p in pivots.iterrows():
         idx = int(p["index"])
         price = float(p["price"])
-        ax.scatter([idx], [price], s=30, zorder=6)
+        ax.scatter([idx], [price], s=26, zorder=6)
         offset = 10 if str(p["direction"]) == "UP" else -14
         ax.annotate(
             str(p["pivot_type"]),
@@ -195,18 +170,37 @@ def _add_transition_markers(ax, candles: pd.DataFrame, left: int, right: int) ->
     states = candles["behaviour_state"].to_numpy(dtype=int)
     for idx in range(max(left + 1, 1), min(right + 1, len(candles))):
         if states[idx] != states[idx - 1]:
-            ax.axvline(idx, linestyle=":", linewidth=0.65, alpha=0.35)
+            ax.axvline(idx, linestyle=":", linewidth=0.55, alpha=0.28)
 
 
-def _summary_text(candles: pd.DataFrame, left: int, right: int) -> str:
+def _summary(candles: pd.DataFrame, left: int, right: int) -> str:
     frame = candles.iloc[left:right + 1]
     counts = frame["behaviour_name"].value_counts()
-    parts = [f"{name}: {int(counts.get(name, 0))}" for name in STATE_NAMES.values() if counts.get(name, 0)]
-    return " | ".join(parts) if parts else "No behaviour measurements"
+    parts = [f"{name} {int(counts.get(name, 0))}" for name in STATE_NAMES.values() if counts.get(name, 0)]
+    return " | ".join(parts)
+
+
+def _pivot_table(structure: pd.DataFrame, start_pos: int, end_pos: int, candles: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for pos in range(start_pos, end_pos + 1):
+        p = structure.iloc[pos]
+        idx = int(p["index"])
+        c = candles.iloc[idx]
+        rows.append({
+            "pivot": str(p["pivot_type"]),
+            "index": idx,
+            "candle": str(c["candle_direction"]),
+            "body%": float(c["body_pct"]),
+            "upper%": float(c["upper_wick_pct"]),
+            "lower%": float(c["lower_wick_pct"]),
+            "range_x": float(c["range_vs_median"]),
+            "state": str(c["behaviour_name"]),
+        })
+    return pd.DataFrame(rows)
 
 
 def _render_panel(
-    axes: np.ndarray,
+    axes: tuple[plt.Axes, plt.Axes, plt.Axes],
     candles: pd.DataFrame,
     structure: pd.DataFrame,
     start_pos: int,
@@ -215,27 +209,28 @@ def _render_panel(
     right: int,
     title: str,
 ) -> None:
-    price_ax, state_ax, metric_ax = axes
+    price_ax, heat_ax, state_ax = axes
     _plot_candles(price_ax, candles, left, right)
-    _add_state_bands(price_ax, candles, left, right)
     _add_transition_markers(price_ax, candles, left, right)
-    _add_pivot_markers(price_ax, structure, candles, start_pos, end_pos)
-    price_ax.set_title(f"{title}\n{_summary_text(candles, left, right)}", fontsize=10)
+    _add_pivot_markers(price_ax, structure, start_pos, end_pos)
+    price_ax.set_title(f"{title}\n{_summary(candles, left, right)}", fontsize=10)
     price_ax.set_ylabel("USDT")
     price_ax.grid(alpha=0.12)
 
-    _plot_behaviour_strip(state_ax, candles, left, right)
-    _plot_metric_strip(metric_ax, candles, left, right)
-    metric_ax.set_xlabel("Candle index")
+    _plot_anatomy_heatmap(heat_ax, candles, left, right)
+    _plot_state_strip(state_ax, candles, left, right)
+    state_ax.set_xlabel("Candle index")
 
 
-def _print_pivot_table(name: str, structure: pd.DataFrame, candles: pd.DataFrame, start_pos: int, end_pos: int) -> None:
-    table = _pivot_rows(structure, start_pos, end_pos, candles)
+def _print_table(name: str, table: pd.DataFrame) -> None:
     print(f"\n{name}")
+    if table.empty:
+        print("No pivot rows")
+        return
     print(table.to_string(index=False, formatters={
-        "body": "{:.0f}%".format,
-        "upper": "{:.0f}%".format,
-        "lower": "{:.0f}%".format,
+        "body%": "{:.0f}%".format,
+        "upper%": "{:.0f}%".format,
+        "lower%": "{:.0f}%".format,
         "range_x": "{:.1f}x".format,
     }))
 
@@ -285,15 +280,14 @@ def create_chart(
     fig, axes = plt.subplots(
         rows * 3,
         1,
-        figsize=(19, 4.6 * rows),
-        gridspec_kw={"height_ratios": sum(([3.4, 1.0, 1.2] for _ in range(rows)), [])},
+        figsize=(19, 4.2 * rows),
+        gridspec_kw={"height_ratios": sum(([3.4, 1.25, 1.0] for _ in range(rows)), [])},
         squeeze=False,
     )
     flat = axes[:, 0]
 
-    panel_axes = flat[0:3]
     _render_panel(
-        panel_axes,
+        (flat[0], flat[1], flat[2]),
         candles,
         structure,
         current_start_pos,
@@ -302,7 +296,7 @@ def create_chart(
         current_right,
         "CURRENT — actual candle behaviour",
     )
-    _print_pivot_table("CURRENT pivot candle anatomy", structure, candles, current_start_pos, current_end_pos)
+    _print_table("CURRENT pivot candle anatomy", _pivot_table(structure, current_start_pos, current_end_pos, candles))
 
     for panel, (_, match) in enumerate(matches.iterrows(), start=1):
         end_pos = int(match["candidate_end_position"])
@@ -311,9 +305,9 @@ def create_chart(
         end_index = int(structure.iloc[end_pos]["index"])
         left = max(0, start_index - context_candles)
         right = min(len(candles) - 1, end_index + max(3, context_candles // 3))
-        panel_axes = flat[panel * 3:(panel + 1) * 3]
+        base = panel * 3
         _render_panel(
-            panel_axes,
+            (flat[base], flat[base + 1], flat[base + 2]),
             candles,
             structure,
             start_pos,
@@ -322,16 +316,17 @@ def create_chart(
             right,
             f"HISTORICAL MATCH #{panel} — structural similarity {float(match['similarity']):.4f}",
         )
-        _print_pivot_table(f"MATCH #{panel} pivot candle anatomy", structure, candles, start_pos, end_pos)
+        _print_table(f"MATCH #{panel} pivot candle anatomy", _pivot_table(structure, start_pos, end_pos, candles))
 
     fig.suptitle(
         f"{cfg.symbol} {timeframe} — Candle Behaviour Research\n"
-        f"Actual OHLC candles + behaviour states + structural context | ZigZag {threshold:.2f}% | {pivots} pivots\n"
-        "Behaviour states are descriptive measurements, not trading signals, outcomes, or predictions.",
-        fontsize=14,
+        f"OHLC candles + candle-anatomy heatmap + behaviour state | ZigZag {threshold:.2f}% | {pivots} pivots\n"
+        "Historical candidates are selected by the existing structural matcher; candle anatomy is shown for direct inspection.\n"
+        "No entries, targets, stops, outcomes, or predictions are used.",
+        fontsize=13,
         fontweight="bold",
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=150, bbox_inches="tight")
     if show:
