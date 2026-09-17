@@ -3,11 +3,9 @@ from __future__ import annotations
 """Historical synchronized multi-timeframe Candle Story Replay.
 
 Research-only descriptive analysis. It finds exact common completed-candle
-reference timestamps across ETH/USDT timeframes, screens the full synchronized
-history with vectorized candle-structure similarity, then reconstructs the
-compressed chronological story at a small candidate pool. The final ranking
-combines cross-timeframe candle-structure similarity with cross-timeframe
-story-family similarity.
+reference timestamps across ETH/USDT timeframes, screens synchronized history
+with vectorized candle-structure similarity, then reconstructs compressed
+chronological stories for a small candidate pool.
 
 No entries, targets, stops, signals, forecasts, or trade recommendations.
 """
@@ -20,13 +18,7 @@ import numpy as np
 import pandas as pd
 
 from config import load_config
-from candle_story_engine import (
-    DEFAULT_WINDOW,
-    major_candle_phases,
-    analyse_window,
-    compress_level_events,
-    raw_story_tokens,
-)
+from candle_story_engine import DEFAULT_WINDOW, analyse_window, raw_story_tokens
 from price_level_interaction_v2 import load_market
 from candle_mtf_history import TIMEFRAMES, REFERENCE_TF, TF_MS, candle_features, build_history, feature_vector, similarity
 
@@ -83,7 +75,7 @@ def exact_index(closes: np.ndarray, ts: int) -> int | None:
 
 
 def build_story(df: pd.DataFrame, start: int, end: int) -> list[str]:
-    _, events, _ = analyse_window(df.iloc[start:end + 1].copy())
+    _, events, _ = analyse_window(df, start, end)
     return raw_story_tokens(df, start, end, events)
 
 
@@ -154,7 +146,7 @@ def run(window: int, top_k: int, screen_pool: int, output_dir: str) -> None:
             tokens = build_story(item["df"], start, end); fam = family_sequence(tokens)
             tf_stories[tf] = tokens
             score = seq_similarity(current_family[tf], fam); story_scores.append(score)
-            story_rows.append({"reference_timestamp": ts, "screen_rank": screen_rank, "timeframe": tf, "candidate_start": start, "candidate_end": end, "candle_structure_similarity": float(data[tf]["similarity"][j]), "story_similarity": float(score), "family_story": " -> ".join(fam), "story": " -> ".join(tokens)})
+            story_rows.append({"reference_timestamp": ts, "screen_rank": screen_rank, "timeframe": tf, "candidate_start": start, "candidate_end": end, "candle_structure_similarity": float(item["similarity"][j]), "story_similarity": float(score), "family_story": " -> ".join(fam), "story": " -> ".join(tokens)})
         story_score = float(np.mean(story_scores)); combined = 0.60 * feature_score + 0.40 * story_score
         rows.append({"reference_timestamp": ts, "screen_rank": screen_rank, "combined_similarity": combined, "cross_tf_candle_similarity": feature_score, "cross_tf_story_similarity": story_score, "alignment_status": "EXACTLY_SYNCHRONIZED", "max_alignment_gap_ms": 0, **{f"{tf}_story": " -> ".join(tf_stories[tf]) for tf in TIMEFRAMES}})
 
