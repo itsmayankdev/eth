@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import websockets
 
-REST_URL = "https://api.binance.com/api/v3/klines"
+REST_URL = "https://data-api.binance.vision/api/v3/klines"
 INTERVAL_MS = {"1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 
 
@@ -26,26 +26,29 @@ class BinanceClient:
             response.raise_for_status()
             return response.json()
 
-    def download_range(self, symbol: str, interval: str, start_ms: int, end_ms: int) -> list[list[Any]]:
+    def download_range(self, symbol: str, interval: str, start_ms: int, end_ms: int, max_candles: int | None = None) -> list[list[Any]]:
         if interval not in INTERVAL_MS:
             raise ValueError(f"Unsupported Binance interval: {interval}")
         rows: list[list[Any]] = []
         cursor = start_ms
         step = INTERVAL_MS[interval]
-        while cursor <= end_ms:
-            batch = self.fetch_klines(symbol, interval, cursor, end_ms)
+        target = max_candles if max_candles is not None else float("inf")
+        while cursor <= end_ms and len(rows) < target:
+            remaining = int(target - len(rows)) if target != float("inf") else 1000
+            limit = min(1000, max(1, remaining))
+            batch = self.fetch_klines(symbol, interval, cursor, end_ms, limit=limit)
             if not batch:
                 break
-            rows.extend(batch)
+            rows.extend(batch[:remaining])
             last = int(batch[-1][0])
             next_cursor = last + step
             if next_cursor <= cursor:
                 break
             cursor = next_cursor
-            if len(batch) < 1000:
+            if len(batch) < limit:
                 break
             time.sleep(0.15)
-        return rows
+        return rows[:max_candles] if max_candles is not None else rows
 
     @staticmethod
     def normalize_klines(symbol: str, interval: str, raw: list[list[Any]], now_ms: int | None = None) -> list[tuple]:
