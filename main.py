@@ -27,18 +27,19 @@ def cmd_download(candles: int | None) -> None:
     cfg = load_config()
     db = MarketDatabase(cfg.database)
     client = BinanceClient()
-    target = candles if candles is not None else cfg.historical_candles
-    if target <= 0:
+    override = candles
+    if override is not None and override <= 0:
         raise ValueError("candles must be greater than 0")
 
-    table = Table("Timeframe", "Rows added", "Last candle")
+    table = Table("Timeframe", "Target candles", "Rows added", "Last candle")
     for tf in cfg.timeframes:
+        target = override if override is not None else cfg.candles_for(tf)
         try:
             added = download_timeframe(db, client, cfg.symbol, tf, target)
             last = db.last_open_time(cfg.symbol, tf)
-            table.add_row(tf, str(added), str(last or "-"))
+            table.add_row(tf, str(target), str(added), str(last or "-"))
         except Exception as exc:
-            table.add_row(tf, f"ERROR: {exc}", "-")
+            table.add_row(tf, str(target), f"ERROR: {exc}", "-")
     console.print(table)
     db.close()
 
@@ -72,7 +73,7 @@ def main() -> None:
         "--candles",
         type=int,
         default=None,
-        help="Historical closed candles to load on an empty timeframe (default: config value)",
+        help="Override the configured candle count for every timeframe",
     )
     sub.add_parser("update")
     sub.add_parser("scan")
@@ -82,7 +83,7 @@ def main() -> None:
     elif args.command == "download":
         cmd_download(args.candles)
     elif args.command == "update":
-        # Empty timeframes receive the configured initial history; existing
+        # Empty timeframes receive their configured initial history; existing
         # timeframes receive only candles after their latest stored candle.
         cmd_download(None)
     elif args.command == "scan":
