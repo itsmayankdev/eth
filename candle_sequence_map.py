@@ -7,14 +7,13 @@ Research-only: no signals, trades, targets, stops, outcomes, or predictions.
 from __future__ import annotations
 
 import argparse
-import shutil
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from candle_similarity import candle_features, candle_sequence_similarity
+from candle_similarity import candle_features, rank_candle_sequences
 from config import load_config
 from data.database import MarketDatabase
 
@@ -41,14 +40,6 @@ def frac(mask):
     return float(mask.mean()) if len(mask) else 0.0
 
 
-def level(value, low, high, low_name, mid_name, high_name):
-    if value <= low:
-        return low_name
-    if value >= high:
-        return high_name
-    return mid_name
-
-
 def block_features(f: pd.DataFrame) -> dict:
     direction = f.direction.to_numpy(dtype=float)
     r = rr(f)
@@ -73,8 +64,6 @@ def block_features(f: pd.DataFrame) -> dict:
 
 
 def split_blocks(f: pd.DataFrame, n_blocks=BLOCKS):
-    # np.array_split preserves every candle, including when window is not
-    # perfectly divisible by the requested block count.
     return [f.iloc[idx] for idx in np.array_split(np.arange(len(f)), n_blocks) if len(idx)]
 
 
@@ -115,13 +104,17 @@ def sequence_map(f: pd.DataFrame, n_blocks=BLOCKS) -> tuple[list[dict], dict]:
 
 
 def rank_windows(features, current_end, window, top_k):
-    current = features.iloc[current_end - window + 1:current_end + 1]
-    rows = []
-    for end in range(window - 1, current_end - window + 1):
-        candidate = features.iloc[end - window + 1:end + 1]
-        score = candle_sequence_similarity(current, candidate)
-        rows.append({"candidate_start": end - window + 1, "candidate_end": end, "similarity": float(score)})
-    return pd.DataFrame(rows).sort_values("similarity", ascending=False).head(top_k).reset_index(drop=True)
+    """Fast historical ranking; detailed block mapping is only done for top-K."""
+    current_start = current_end - window + 1
+    candidate_ends = range(window - 1, current_start)
+    ranked = rank_candle_sequences(
+        features,
+        current_start=current_start,
+        current_end=current_end,
+        candidate_ends=candidate_ends,
+        chunk_size=4096,
+    )
+    return ranked.head(top_k).reset_index(drop=True)
 
 
 def main():
@@ -143,6 +136,7 @@ def main():
 
     current_rows, match_rows, block_rows = [], [], []
     for tf in timeframes:
+        print(f"[{tf}] loading and vectorizing historical windows...", flush=True)
         raw = load_market(cfg, tf)
         if len(raw) < args.window * 2:
             continue
@@ -155,6 +149,7 @@ def main():
             block_rows.append({"timeframe": tf, "source": "current", "rank": 0, **b})
 
         ranked = rank_windows(f, current_end, args.window, args.top_k)
+        print(f"[{tf}] ranked {len(ranked)} top historical windows", flush=True)
         for rank, row in ranked.iterrows():
             s, e = int(row.candidate_start), int(row.candidate_end)
             match = f.iloc[s:e + 1]
@@ -172,7 +167,7 @@ def main():
 
     if not matches_df.empty:
         fig, ax = plt.subplots(figsize=(15, 8))
-        for tf, g in matches_df[matches_df.rank <= min(10, args.top_k)].groupby("timeframe"):
+        for tf, g in matches_df[matches_df["rank"] <= min(10, args.top_k)].groupby("timeframe"):
             ax.plot(g["rank"], g["similarity"], marker="o", label=tf)
         ax.set_title("Sequential Candle Behaviour — Historical Similarity")
         ax.set_xlabel("Historical neighbour rank")
