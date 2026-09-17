@@ -31,7 +31,7 @@ timeframes:
 
 pattern:
   lookbacks: [3, 5, 8, 10, 15, 20, 30, 50]
-  minimum_similarity: 0.85
+  minimum_similarity: 0.70
   top_k: 10
 
 turning_points:
