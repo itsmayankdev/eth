@@ -8,6 +8,7 @@ from structure.turning_points import zigzag_turns
 
 STRUCTURE_COLUMNS = [
     "index",
+    "confirmation_index",
     "direction",
     "price",
     "pivot_type",
@@ -22,15 +23,9 @@ STRUCTURE_COLUMNS = [
 def build_structure(candles: pd.DataFrame, threshold_pct: float) -> pd.DataFrame:
     """Build a normalized, multi-scale market-structure sequence.
 
-    The representation keeps the confirmed ZigZag pivots and adds:
-    - HH/HL/LH/LL classification;
-    - bars between consecutive pivots;
-    - percentage change from the previous pivot of any type;
-    - price normalized to the first pivot in the sequence.
-
-    No future candles are used beyond the confirmation already required by
-    the ZigZag detector, so this representation is suitable for walk-forward
-    research once the final, unconfirmed pivot is excluded by the detector.
+    ``index`` is the pivot candle; ``confirmation_index`` is the later candle
+    where the ZigZag reversal threshold was reached.  This distinction lets
+    downstream evaluation use only information available at decision time.
     """
     turns = zigzag_turns(candles, threshold_pct)
     out = classify_swings(turns)
@@ -39,6 +34,7 @@ def build_structure(candles: pd.DataFrame, threshold_pct: float) -> pd.DataFrame
 
     out = out.copy()
     out["index"] = out["index"].astype(int)
+    out["confirmation_index"] = out["confirmation_index"].astype(int)
     out["price"] = out["price"].astype(float)
     out["bars_since_prev"] = out["index"].diff()
     out["leg_pct"] = out["price"].pct_change() * 100.0
