@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-"""Candle Story Engine — descriptive market-structure research only.
+"""Sequence-aware Candle Story Engine.
 
-The engine has two stages:
-1) vectorized candle-behaviour screening across the full history;
-2) detailed price-level analysis only for the strongest candidate windows.
+Research-only market-behaviour analysis. It does not create entries, targets,
+stops, trade signals, or forecasts.
 
-This avoids running the expensive price-level detector over every historical
-window. The output is a compact chronological story, not a trading signal.
+Architecture:
+1. Fast vectorized screening over the complete history.
+2. Detailed structural analysis on a small candidate pool.
+3. Chronological event-sequence similarity for final historical ranking.
+
+The final matcher evaluates event identity, order, spacing, and broad candle
+context rather than relying only on aggregate feature counts.
 """
 
 import argparse
@@ -23,6 +27,17 @@ from price_level_interaction_v2 import analyse_window, load_market, TIMEFRAMES
 DEFAULT_WINDOW = 20
 DEFAULT_TOP_K = 25
 SCREEN_MULTIPLIER = 4
+MIN_POOL = 100
+
+EVENT_VOCAB = [
+    "INITIAL_BULLISH_BIAS", "INITIAL_BEARISH_BIAS", "INITIAL_BALANCED_BEHAVIOUR",
+    "RANGE_EXPANSION", "RANGE_COMPRESSION",
+    "DIRECTIONAL_SHIFT", "DIRECTION_CHANGE_IN_CHARACTER",
+    "BODY_EXPANSION", "BODY_COMPRESSION", "COUNTERMOVE_AND_RENEWAL",
+    "LEVEL_TEST", "LEVEL_BREAK", "HOLD", "REJECTION", "PULLBACK_TO_LEVEL",
+    "REPEATED_LEVEL_TEST", "POST_TEST_EXPANSION",
+]
+EVENT_TO_ID = {x: i + 1 for i, x in enumerate(EVENT_VOCAB)}
 
 CANDLE_FEATURES = [
     "first_direction", "second_direction", "direction_shift",
@@ -74,13 +89,7 @@ def build_screen_features(df: pd.DataFrame, window: int) -> tuple[np.ndarray, li
     m = n - window + 1
     if m <= 0:
         return np.empty((0, len(CANDLE_FEATURES))), CANDLE_FEATURES
-
-    # Window halves are calculated from prefix sums, so every historical
-    # window is represented without a Python loop.
     half = window // 2
-
-    def win_mean(x):
-        return rolling_mean(x, window)
 
     def half_mean(x, second=False):
         cs = np.concatenate(([0.0], np.cumsum(x, dtype=float)))
@@ -89,34 +98,23 @@ def build_screen_features(df: pd.DataFrame, window: int) -> tuple[np.ndarray, li
         b = starts + (window if second else half)
         return (cs[b] - cs[a]) / float(half)
 
-    first_dir = half_mean(direction)
-    second_dir = half_mean(direction, True)
-    first_range = half_mean(rng)
-    second_range = half_mean(rng, True)
-    first_body = half_mean(body)
-    second_body = half_mean(body, True)
-    first_cl = half_mean(close_loc)
-    second_cl = half_mean(close_loc, True)
-    first_alt = half_mean(alt)
-    second_alt = half_mean(alt, True)
-    first_small = half_mean(small)
-    second_small = half_mean(small, True)
-    first_large = half_mean(large)
-    second_large = half_mean(large, True)
-    first_upper = half_mean(upper_rej)
-    second_upper = half_mean(upper_rej, True)
-    first_lower = half_mean(lower_rej)
-    second_lower = half_mean(lower_rej, True)
+    first_dir = half_mean(direction); second_dir = half_mean(direction, True)
+    first_range = half_mean(rng); second_range = half_mean(rng, True)
+    first_body = half_mean(body); second_body = half_mean(body, True)
+    first_cl = half_mean(close_loc); second_cl = half_mean(close_loc, True)
+    first_alt = half_mean(alt); second_alt = half_mean(alt, True)
+    first_small = half_mean(small); second_small = half_mean(small, True)
+    first_large = half_mean(large); second_large = half_mean(large, True)
+    first_upper = half_mean(upper_rej); second_upper = half_mean(upper_rej, True)
+    first_lower = half_mean(lower_rej); second_lower = half_mean(lower_rej, True)
 
     matrix = np.column_stack([
         first_dir, second_dir, second_dir - first_dir,
         first_range, second_range, second_range - first_range,
         first_body, second_body, second_body - first_body,
         first_cl, second_cl, second_cl - first_cl,
-        first_alt, second_alt,
-        first_small, second_small,
-        first_large, second_large,
-        first_upper, second_upper,
+        first_alt, second_alt, first_small, second_small,
+        first_large, second_large, first_upper, second_upper,
         first_lower, second_lower,
     ])
     return matrix, CANDLE_FEATURES
@@ -135,119 +133,146 @@ def robust_similarity(query: np.ndarray, candidates: np.ndarray) -> np.ndarray:
 
 def major_candle_phases(df: pd.DataFrame, start: int, end: int) -> list[str]:
     w = df.iloc[start:end + 1]
-    o = w.open.to_numpy(float)
-    h = w.high.to_numpy(float)
-    l = w.low.to_numpy(float)
-    c = w.close.to_numpy(float)
-    rng = np.maximum(h - l, 1e-12)
-    body = np.abs(c - o)
-    direction = np.sign(c - o)
-    split = len(w) // 2
-
+    o = w.open.to_numpy(float); h = w.high.to_numpy(float)
+    l = w.low.to_numpy(float); c = w.close.to_numpy(float)
+    rng = np.maximum(h - l, 1e-12); body = np.abs(c - o)
+    direction = np.sign(c - o); split = len(w) // 2
     phases: list[str] = []
-    d1 = float(np.mean(direction[:split]))
-    d2 = float(np.mean(direction[split:]))
+    d1 = float(np.mean(direction[:split])); d2 = float(np.mean(direction[split:]))
     r1 = float(np.mean(rng[:split])); r2 = float(np.mean(rng[split:]))
     b1 = float(np.mean(body[:split])); b2 = float(np.mean(body[split:]))
 
-    if d1 >= 0.25:
-        phases.append("INITIAL_BULLISH_BIAS")
-    elif d1 <= -0.25:
-        phases.append("INITIAL_BEARISH_BIAS")
-    else:
-        phases.append("INITIAL_BALANCED_BEHAVIOUR")
-
-    if r2 > r1 * 1.20:
-        phases.append("RANGE_EXPANSION")
-    elif r2 < r1 * 0.80:
-        phases.append("RANGE_COMPRESSION")
-
+    if d1 >= 0.25: phases.append("INITIAL_BULLISH_BIAS")
+    elif d1 <= -0.25: phases.append("INITIAL_BEARISH_BIAS")
+    else: phases.append("INITIAL_BALANCED_BEHAVIOUR")
+    if r2 > r1 * 1.20: phases.append("RANGE_EXPANSION")
+    elif r2 < r1 * 0.80: phases.append("RANGE_COMPRESSION")
     if d1 * d2 < -0.03 and abs(d2 - d1) >= 0.35:
         phases.append("DIRECTIONAL_SHIFT")
     elif abs(d2 - d1) >= 0.35:
         phases.append("DIRECTION_CHANGE_IN_CHARACTER")
+    if b2 > b1 * 1.20: phases.append("BODY_EXPANSION")
+    elif b2 < b1 * 0.80: phases.append("BODY_COMPRESSION")
 
-    if b2 > b1 * 1.20:
-        phases.append("BODY_EXPANSION")
-    elif b2 < b1 * 0.80:
-        phases.append("BODY_COMPRESSION")
-
-    # Detect a compact pullback-like middle move without calling it a signal.
     if len(direction) >= 6:
         third = len(direction) // 3
-        a = float(np.mean(direction[:third]))
-        m = float(np.mean(direction[third:2 * third]))
+        a = float(np.mean(direction[:third])); m = float(np.mean(direction[third:2 * third]))
         z = float(np.mean(direction[2 * third:]))
         if a * m < -0.05 and z * a > 0.02:
             phases.append("COUNTERMOVE_AND_RENEWAL")
-
     return phases
+
+
+def raw_story_tokens(df: pd.DataFrame, start: int, end: int, level_events: list[dict]) -> list[str]:
+    """Build a chronological token sequence with only meaningful changes."""
+    phases = major_candle_phases(df, start, end)
+    tokens = list(phases)
+
+    ordered_events = sorted(level_events, key=lambda x: int(x["local_index"]))
+    # Preserve chronological order of the structural events. Repeated and
+    # post-test states are attached immediately after their originating event.
+    for ev in ordered_events:
+        name = str(ev["interaction"])
+        mapped = {
+            "TEST": "LEVEL_TEST",
+            "PULLBACK": "PULLBACK_TO_LEVEL",
+            "REJECTION": "REJECTION",
+            "HOLD": "HOLD",
+            "BREAK": "LEVEL_BREAK",
+        }.get(name, name)
+        tokens.append(mapped)
+        if int(ev.get("repeated_test", 0)):
+            tokens.append("REPEATED_LEVEL_TEST")
+        if int(ev.get("post_interaction_expansion", 0)):
+            tokens.append("POST_TEST_EXPANSION")
+
+    # Remove consecutive duplicates. Do not globally deduplicate: sequence
+    # repetition itself carries information.
+    compact = []
+    for token in tokens:
+        if not compact or compact[-1] != token:
+            compact.append(token)
+    return compact
+
+
+def sequence_signature(tokens: list[str], max_len: int = 16) -> tuple[np.ndarray, np.ndarray]:
+    """Return token IDs and normalized positions for sequence comparison."""
+    if not tokens:
+        return np.zeros(max_len, dtype=float), np.zeros(max_len, dtype=float)
+    ids = np.asarray([EVENT_TO_ID.get(t, 0) for t in tokens[:max_len]], dtype=float)
+    pos = np.linspace(0.0, 1.0, len(ids), dtype=float)
+    out_ids = np.zeros(max_len, dtype=float); out_pos = np.zeros(max_len, dtype=float)
+    out_ids[:len(ids)] = ids
+    out_pos[:len(pos)] = pos
+    return out_ids, out_pos
+
+
+def sequence_similarity(q_tokens: list[str], c_tokens: list[str]) -> float:
+    """Order-aware similarity using token identity, edit alignment and spacing."""
+    if not q_tokens or not c_tokens:
+        return 0.0
+
+    # Dynamic-programming normalized edit similarity. Substitution cost is
+    # smaller for related structural concepts so LEVEL_TEST/REPEATED_LEVEL_TEST
+    # are not treated as unrelated noise.
+    related = {
+        frozenset(("LEVEL_TEST", "REPEATED_LEVEL_TEST")),
+        frozenset(("RANGE_EXPANSION", "BODY_EXPANSION")),
+        frozenset(("RANGE_COMPRESSION", "BODY_COMPRESSION")),
+        frozenset(("DIRECTIONAL_SHIFT", "DIRECTION_CHANGE_IN_CHARACTER")),
+    }
+
+    def sub_cost(a, b):
+        if a == b: return 0.0
+        if frozenset((a, b)) in related: return 0.35
+        return 1.0
+
+    n, m = len(q_tokens), len(c_tokens)
+    dp = np.zeros((n + 1, m + 1), dtype=float)
+    dp[:, 0] = np.arange(n, dtype=float)
+    dp[0, :] = np.arange(m, dtype=float)
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            dp[i, j] = min(
+                dp[i - 1, j] + 1.0,
+                dp[i, j - 1] + 1.0,
+                dp[i - 1, j - 1] + sub_cost(q_tokens[i - 1], c_tokens[j - 1]),
+            )
+    edit_sim = 1.0 - dp[n, m] / max(n, m)
+
+    q_ids, q_pos = sequence_signature(q_tokens)
+    c_ids, c_pos = sequence_signature(c_tokens)
+    length = min(len(q_tokens), len(c_tokens), 16)
+    if length:
+        identity = float(np.mean(q_ids[:length] == c_ids[:length]))
+        spacing = 1.0 - float(np.mean(np.abs(q_pos[:length] - c_pos[:length])))
+    else:
+        identity = spacing = 0.0
+
+    # Sequence order dominates the final score; edit alignment prevents one
+    # extra event from destroying an otherwise similar story.
+    return float(np.clip(0.60 * edit_sim + 0.25 * identity + 0.15 * spacing, 0.0, 1.0))
 
 
 def build_story(df: pd.DataFrame, start: int, end: int):
     level_row, level_events = analyse_window(df, start, end)
-    phases = major_candle_phases(df, start, end)
-
-    # Price-level events are the structural backbone of the story. We retain
-    # their chronology but collapse duplicate event types.
-    ordered = []
-    seen = set()
-    for ev in sorted(level_events, key=lambda x: int(x["local_index"])):
-        name = str(ev["interaction"])
-        if name not in seen:
-            ordered.append(name)
-            seen.add(name)
-        if int(ev["repeated_test"]):
-            if "REPEATED_LEVEL_TEST" not in seen:
-                ordered.append("REPEATED_LEVEL_TEST"); seen.add("REPEATED_LEVEL_TEST")
-        if int(ev["post_interaction_expansion"]):
-            if "POST_TEST_EXPANSION" not in seen:
-                ordered.append("POST_TEST_EXPANSION"); seen.add("POST_TEST_EXPANSION")
-
-    # Translate raw interaction vocabulary into a compact structural story.
-    structural_map = {
-        "TEST": "LEVEL_TEST",
-        "PULLBACK": "PULLBACK_TO_LEVEL",
-        "REJECTION": "REJECTION",
-        "HOLD": "HOLD",
-        "BREAK": "LEVEL_BREAK",
-    }
-    interaction_story = []
-    for x in ordered:
-        interaction_story.append(structural_map.get(x, x))
-
-    # Only retain candle phases that add information not already expressed by
-    # the level lifecycle. This prevents a story from becoming one event per candle.
-    story = []
-    for phase in phases:
-        if phase not in story:
-            story.append(phase)
-    for phase in interaction_story:
-        if phase not in story:
-            story.append(phase)
-
-    # A level lifecycle is more informative than a generic candle descriptor,
-    # so put it after the broad context but preserve its chronological order.
-    if not story:
-        story = ["NO_MEANINGFUL_STORY"]
-
+    tokens = raw_story_tokens(df, start, end, level_events)
+    story = " -> ".join(tokens) if tokens else "NO_MEANINGFUL_STORY"
     row = {
         **level_row,
-        "story": " -> ".join(story),
+        "story": story,
         "story_event_count": len(level_events),
-        "story_phase_count": len(story),
+        "story_phase_count": len(tokens),
     }
-    return row, level_events
+    return row, level_events, tokens
 
 
-def detailed_rank(current: dict, candidates: list[dict], top_k: int):
-    if not candidates:
-        return []
-    x = np.asarray([[float(r.get(k, 0.0)) for k in STORY_FEATURES] for r in candidates], dtype=float)
+def detailed_feature_similarity(current: dict, candidate: dict) -> float:
     q = np.asarray([float(current.get(k, 0.0)) for k in STORY_FEATURES], dtype=float)
-    sim = robust_similarity(q, x)
-    order = np.argsort(-sim)[:top_k]
-    return [(int(i), float(sim[i])) for i in order]
+    x = np.asarray([float(candidate.get(k, 0.0)) for k in STORY_FEATURES], dtype=float)
+    scale = np.maximum(np.abs(q) * 0.25, 1.0)
+    d = np.linalg.norm((x - q) / scale) / np.sqrt(len(q))
+    return float(1.0 / (1.0 + d))
 
 
 def main():
@@ -273,53 +298,61 @@ def main():
             print(f"[{tf}] skipped: insufficient history", flush=True)
             continue
 
-        print(f"[{tf}] vectorized candle screening ({len(df)} candles)...", flush=True)
+        print(f"[{tf}] vectorized screening ({len(df):,} candles)...", flush=True)
         screen, _ = build_screen_features(df, args.window)
         current_idx = len(df) - args.window
         current_screen = screen[-1]
         candidate_screen = screen[:-1]
-
-        # First pass: cheap NumPy screening. Only a small pool receives the
-        # expensive price-level analysis.
         coarse_sim = robust_similarity(current_screen, candidate_screen)
-        pool_size = min(len(coarse_sim), max(args.top_k * SCREEN_MULTIPLIER, 100))
+        pool_size = min(len(coarse_sim), max(args.top_k * SCREEN_MULTIPLIER, MIN_POOL))
         coarse_order = np.argsort(-coarse_sim)[:pool_size]
 
-        current, current_events = build_story(df, current_idx, len(df) - 1)
+        current, current_events, current_tokens = build_story(df, current_idx, len(df) - 1)
         current_rows.append({"timeframe": tf, "window": args.window, **current})
 
         candidates = []
         candidate_indices = []
+        candidate_tokens = []
         for screen_idx in coarse_order:
             end = int(screen_idx) + args.window - 1
             start = end - args.window + 1
-            row, _ = build_story(df, start, end)
+            row, _, tokens = build_story(df, start, end)
             row["screen_similarity"] = float(coarse_sim[screen_idx])
             candidates.append(row)
             candidate_indices.append((start, end))
+            candidate_tokens.append(tokens)
 
-        ranked = detailed_rank(current, candidates, args.top_k)
-        print(f"[{tf}] screened {len(candidate_screen):,} windows -> detailed {len(candidates)} -> ranked {len(ranked)}", flush=True)
+        scored = []
+        for i, row in enumerate(candidates):
+            seq = sequence_similarity(current_tokens, candidate_tokens[i])
+            feat = detailed_feature_similarity(current, row)
+            # Chronological story is deliberately the dominant component.
+            final = 0.75 * seq + 0.25 * feat
+            scored.append((i, final, seq, feat))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        ranked = scored[:args.top_k]
 
-        for rank, (ci, sim) in enumerate(ranked, 1):
-            row = candidates[ci]
-            s, e = candidate_indices[ci]
+        print(f"[{tf}] screened {len(candidate_screen):,} -> detailed {len(candidates)} -> sequence-ranked {len(ranked)}", flush=True)
+
+        for rank, (ci, sim, seq_sim, feat_sim) in enumerate(ranked, 1):
+            row = candidates[ci]; s, e = candidate_indices[ci]
             match_rows.append({
-                "timeframe": tf,
-                "rank": rank,
+                "timeframe": tf, "rank": rank,
                 "story_similarity": sim,
+                "sequence_similarity": seq_sim,
+                "feature_similarity": feat_sim,
                 "screen_similarity": row.get("screen_similarity", 0.0),
-                "candidate_start": s,
-                "candidate_end": e,
+                "candidate_start": s, "candidate_end": e,
                 "open_time": int(df.iloc[s].open_time),
                 "close_time": int(df.iloc[e].close_time),
                 **row,
             })
-            _, ev = build_story(df, s, e)
+            _, ev, _ = build_story(df, s, e)
             for event in ev:
                 event_rows.append({
                     "timeframe": tf, "rank": rank,
                     "story_similarity": sim,
+                    "sequence_similarity": seq_sim,
                     "candidate_start": s, "candidate_end": e,
                     **event,
                 })
@@ -334,7 +367,7 @@ def main():
         for tf, g in m.groupby("timeframe"):
             g = g.sort_values("rank")
             ax.plot(g["rank"], g["story_similarity"], marker="o", label=tf)
-        ax.set_title("Candle Story Similarity Across Historical Windows")
+        ax.set_title("Sequence-Aware Candle Story Similarity")
         ax.set_xlabel("Historical match rank")
         ax.set_ylabel("Story similarity")
         ax.grid(alpha=0.15)
