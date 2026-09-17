@@ -14,7 +14,13 @@ from structure.representation import build_structure
 from structure.similarity import find_similar_structures
 
 
-PIVOT_TYPES = {"HH", "HL", "LH", "LL"}
+STATE_NAMES = {
+    0: "compression",
+    1: "balanced",
+    2: "expansion",
+    3: "directional",
+    4: "rejection",
+}
 
 
 def _candle_width(x: np.ndarray) -> float:
@@ -23,8 +29,7 @@ def _candle_width(x: np.ndarray) -> float:
     return max(0.15, float(np.median(np.diff(x))) * 0.65)
 
 
-def _candle_features(candles: pd.DataFrame) -> pd.DataFrame:
-    """Calculate descriptive OHLC candle-anatomy features."""
+def _prepare(candles: pd.DataFrame, window: int = 12) -> pd.DataFrame:
     out = candles.copy()
     o = pd.to_numeric(out["open"], errors="coerce")
     h = pd.to_numeric(out["high"], errors="coerce")
@@ -37,39 +42,43 @@ def _candle_features(candles: pd.DataFrame) -> pd.DataFrame:
     lower = np.minimum(o, c) - l
 
     out["range_pct"] = rng / c.replace(0, np.nan) * 100.0
-    out["body_pct_of_range"] = body / rng * 100.0
+    out["body_pct"] = body / rng * 100.0
     out["upper_wick_pct"] = upper / rng * 100.0
     out["lower_wick_pct"] = lower / rng * 100.0
     out["close_location_pct"] = (c - l) / rng * 100.0
-    out["direction"] = np.where(c >= o, "UP", "DOWN")
+    out["candle_direction"] = np.where(c >= o, "UP", "DOWN")
+
     median_range = out["range_pct"].rolling(20, min_periods=5).median()
     out["range_vs_median"] = out["range_pct"] / median_range.replace(0, np.nan)
-    return out
 
-
-def _regime_features(candles: pd.DataFrame, window: int = 12) -> pd.DataFrame:
-    """Create observational compression/expansion descriptors.
-
-    These are descriptive measurements only. They are not trading signals or
-    predictions.
-    """
-    out = candles.copy()
-    close = pd.to_numeric(out["close"], errors="coerce")
-    high = pd.to_numeric(out["high"], errors="coerce")
-    low = pd.to_numeric(out["low"], errors="coerce")
-    changes = close.diff().abs()
-
-    rolling_high = high.rolling(window, min_periods=max(3, window // 2)).max()
-    rolling_low = low.rolling(window, min_periods=max(3, window // 2)).min()
-    range_pct = (rolling_high - rolling_low) / close.replace(0, np.nan) * 100.0
-    path = changes.rolling(window, min_periods=max(3, window // 2)).sum()
-    net = close.diff(window).abs()
+    rolling_high = h.rolling(window, min_periods=max(3, window // 2)).max()
+    rolling_low = l.rolling(window, min_periods=max(3, window // 2)).min()
+    rolling_range = (rolling_high - rolling_low) / c.replace(0, np.nan) * 100.0
+    path = c.diff().abs().rolling(window, min_periods=max(3, window // 2)).sum()
+    net = c.diff(window).abs()
     efficiency = net / path.replace(0, np.nan)
+    baseline = rolling_range.rolling(window * 2, min_periods=max(6, window)).median()
 
-    range_baseline = range_pct.rolling(window * 2, min_periods=max(6, window)).median()
-    out["rolling_range_pct"] = range_pct
+    out["rolling_range_pct"] = rolling_range
     out["efficiency"] = efficiency
-    out["compression_ratio"] = range_pct / range_baseline.replace(0, np.nan)
+    out["compression_ratio"] = rolling_range / baseline.replace(0, np.nan)
+
+    # Descriptive state only. It does not represent a trading signal.
+    state = np.full(len(out), 1, dtype=int)
+    compression = (out["compression_ratio"] < 0.75) & (out["efficiency"] < 0.35)
+    expansion = (out["range_vs_median"] > 1.5)
+    directional = expansion & (out["efficiency"] > 0.55)
+    rejection = (
+        ((out["upper_wick_pct"] > 50) | (out["lower_wick_pct"] > 50))
+        & (out["body_pct"] < 40)
+        & (out["range_vs_median"] > 1.15)
+    )
+    state[compression.fillna(False).to_numpy()] = 0
+    state[expansion.fillna(False).to_numpy()] = 2
+    state[directional.fillna(False).to_numpy()] = 3
+    state[rejection.fillna(False).to_numpy()] = 4
+    out["behaviour_state"] = state
+    out["behaviour_name"] = pd.Series(state, index=out.index).map(STATE_NAMES)
     return out
 
 
@@ -85,94 +94,150 @@ def _plot_candles(ax, candles: pd.DataFrame, start: int, end: int) -> None:
         body_low = min(o, c)
         body_height = max(abs(c - o), 1e-9)
         ax.vlines(x[i], l, h, linewidth=0.8)
-        rect = Rectangle((x[i] - width / 2, body_low), width, body_height, fill=up, linewidth=0.8)
+        rect = Rectangle(
+            (x[i] - width / 2, body_low),
+            width,
+            body_height,
+            fill=up,
+            linewidth=0.8,
+        )
         ax.add_patch(rect)
 
 
-def _behaviour_label(row: pd.Series) -> str:
-    compression = row.get("compression_ratio", np.nan)
-    efficiency = row.get("efficiency", np.nan)
-    range_vs_median = row.get("range_vs_median", np.nan)
-    if pd.notna(compression) and pd.notna(efficiency):
-        if compression < 0.75 and efficiency < 0.35:
-            return "compression / sideways-like"
-        if pd.notna(range_vs_median) and range_vs_median > 1.5 and efficiency > 0.55:
-            return "expansion / directional-like"
-    return "mixed / transitional"
-
-
-def _pivot_anatomy_text(candles: pd.DataFrame, pivot_index: int) -> str:
-    if pivot_index < 0 or pivot_index >= len(candles):
-        return ""
-    r = candles.iloc[pivot_index]
-    return (
-        f"body {r['body_pct_of_range']:.0f}% | "
-        f"upper {r['upper_wick_pct']:.0f}% | "
-        f"lower {r['lower_wick_pct']:.0f}% | "
-        f"range×median {r['range_vs_median']:.1f}"
-    )
-
-
-def _annotate(ax, structure: pd.DataFrame, candles: pd.DataFrame, start_pos: int, end_pos: int, title: str) -> None:
-    pivots = structure.iloc[start_pos:end_pos + 1].copy()
-    if pivots.empty:
-        return
-
-    labels: list[str] = []
-    for _, pivot in pivots.iterrows():
-        x = int(pivot["index"])
-        y = float(pivot["price"])
-        label = str(pivot["pivot_type"])
-        labels.append(label)
-        ax.scatter([x], [y], s=38, zorder=5)
-        offset_y = 12 if str(pivot["direction"]) == "UP" else -18
-        ax.annotate(label, (x, y), xytext=(0, offset_y), textcoords="offset points", ha="center", fontsize=8, fontweight="bold")
-        anatomy = _pivot_anatomy_text(candles, x)
-        if anatomy:
-            ax.annotate(anatomy, (x, y), xytext=(0, 25 if offset_y > 0 else -38), textcoords="offset points", ha="center", fontsize=6.5, alpha=0.8)
-
-    if len(pivots) >= 2:
-        ax.plot(pivots["index"].astype(float), pivots["price"].astype(float), linewidth=1.1, alpha=0.7)
-    first = int(pivots.iloc[0]["index"])
-    last = int(pivots.iloc[-1]["index"])
-    ax.axvline(first, linestyle="--", linewidth=0.8, alpha=0.4)
-    ax.axvline(last, linestyle="--", linewidth=0.8, alpha=0.4)
-
-    last_row = candles.iloc[last]
-    behaviour = _behaviour_label(last_row)
-    ax.set_title(f"{title}\nStructure: {' → '.join(labels)} | endpoint context: {behaviour}", fontsize=10)
-
-
-def _add_context_band(ax, candles: pd.DataFrame, left: int, right: int) -> None:
-    """Mark broad descriptive regimes using transparent observational metrics."""
-    if right <= left:
-        return
+def _plot_behaviour_strip(ax, candles: pd.DataFrame, left: int, right: int) -> None:
+    """Show a compact categorical behaviour strip instead of noisy feature lines."""
     frame = candles.iloc[left:right + 1]
-    for idx in range(left, right + 1):
-        row = candles.iloc[idx]
-        label = _behaviour_label(row)
-        if label == "compression / sideways-like":
-            ax.axvspan(idx - 0.5, idx + 0.5, alpha=0.025)
-        elif label == "expansion / directional-like":
-            ax.axvspan(idx - 0.5, idx + 0.5, alpha=0.045)
-
-
-def _plot_feature_strip(ax, candles: pd.DataFrame, left: int, right: int) -> None:
+    states = frame["behaviour_state"].to_numpy(dtype=int)
     x = np.arange(left, right + 1)
+    ax.step(x, states, where="mid", linewidth=1.5)
+    ax.set_yticks(list(STATE_NAMES))
+    ax.set_yticklabels([STATE_NAMES[i] for i in STATE_NAMES], fontsize=7)
+    ax.set_ylim(-0.5, 4.5)
+    ax.set_ylabel("Behaviour")
+    ax.grid(axis="x", alpha=0.12)
+
+
+def _plot_metric_strip(ax, candles: pd.DataFrame, left: int, right: int) -> None:
+    """Show the two most useful continuous descriptors: range and efficiency."""
     frame = candles.iloc[left:right + 1]
-    ax.plot(x, frame["body_pct_of_range"].to_numpy(), linewidth=1.0, label="body % of range")
-    ax.plot(x, frame["upper_wick_pct"].to_numpy(), linewidth=0.8, label="upper wick %")
-    ax.plot(x, frame["lower_wick_pct"].to_numpy(), linewidth=0.8, label="lower wick %")
-    ax.set_ylim(0, 100)
-    ax.set_ylabel("Candle anatomy (%)")
-    ax.grid(alpha=0.15)
-    ax.legend(loc="upper right", fontsize=7, ncol=3)
+    x = np.arange(left, right + 1)
+    range_ratio = frame["range_vs_median"].clip(0, 3).to_numpy(dtype=float)
+    efficiency = frame["efficiency"].clip(0, 1).to_numpy(dtype=float)
+    ax.plot(x, range_ratio, linewidth=1.0, label="range / median")
+    ax.plot(x, efficiency, linewidth=1.0, label="directional efficiency")
+    ax.axhline(1.0, linestyle="--", linewidth=0.7, alpha=0.5)
+    ax.set_ylim(0, 3)
+    ax.set_ylabel("Relative behaviour")
+    ax.legend(loc="upper right", fontsize=7)
+    ax.grid(alpha=0.12)
 
 
-def _prepare(candles: pd.DataFrame) -> pd.DataFrame:
-    out = _candle_features(candles)
-    out = _regime_features(out)
-    return out
+def _add_state_bands(ax, candles: pd.DataFrame, left: int, right: int) -> None:
+    """Lightly mark contiguous descriptive behaviour regions on the candle chart."""
+    frame = candles.iloc[left:right + 1]
+    states = frame["behaviour_state"].to_numpy(dtype=int)
+    if len(states) == 0:
+        return
+    start = left
+    current = int(states[0])
+    for offset in range(1, len(states) + 1):
+        changed = offset == len(states) or int(states[offset]) != current
+        if not changed:
+            continue
+        end = left + offset - 1
+        alpha = {0: 0.035, 1: 0.0, 2: 0.025, 3: 0.02, 4: 0.03}.get(current, 0.0)
+        if alpha:
+            ax.axvspan(start - 0.5, end + 0.5, alpha=alpha)
+        if offset < len(states):
+            start = left + offset
+            current = int(states[offset])
+
+
+def _pivot_rows(structure: pd.DataFrame, start_pos: int, end_pos: int, candles: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for pos in range(start_pos, end_pos + 1):
+        p = structure.iloc[pos]
+        idx = int(p["index"])
+        c = candles.iloc[idx]
+        rows.append(
+            {
+                "pivot": str(p["pivot_type"]),
+                "index": idx,
+                "body": float(c["body_pct"]),
+                "upper": float(c["upper_wick_pct"]),
+                "lower": float(c["lower_wick_pct"]),
+                "range_x": float(c["range_vs_median"]),
+                "state": str(c["behaviour_name"]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _add_pivot_markers(ax, structure: pd.DataFrame, candles: pd.DataFrame, start_pos: int, end_pos: int) -> None:
+    pivots = structure.iloc[start_pos:end_pos + 1]
+    for _, p in pivots.iterrows():
+        idx = int(p["index"])
+        price = float(p["price"])
+        ax.scatter([idx], [price], s=30, zorder=6)
+        offset = 10 if str(p["direction"]) == "UP" else -14
+        ax.annotate(
+            str(p["pivot_type"]),
+            (idx, price),
+            xytext=(0, offset),
+            textcoords="offset points",
+            ha="center",
+            fontsize=8,
+            fontweight="bold",
+        )
+
+
+def _add_transition_markers(ax, candles: pd.DataFrame, left: int, right: int) -> None:
+    states = candles["behaviour_state"].to_numpy(dtype=int)
+    for idx in range(max(left + 1, 1), min(right + 1, len(candles))):
+        if states[idx] != states[idx - 1]:
+            ax.axvline(idx, linestyle=":", linewidth=0.65, alpha=0.35)
+
+
+def _summary_text(candles: pd.DataFrame, left: int, right: int) -> str:
+    frame = candles.iloc[left:right + 1]
+    counts = frame["behaviour_name"].value_counts()
+    parts = [f"{name}: {int(counts.get(name, 0))}" for name in STATE_NAMES.values() if counts.get(name, 0)]
+    return " | ".join(parts) if parts else "No behaviour measurements"
+
+
+def _render_panel(
+    axes: np.ndarray,
+    candles: pd.DataFrame,
+    structure: pd.DataFrame,
+    start_pos: int,
+    end_pos: int,
+    left: int,
+    right: int,
+    title: str,
+) -> None:
+    price_ax, state_ax, metric_ax = axes
+    _plot_candles(price_ax, candles, left, right)
+    _add_state_bands(price_ax, candles, left, right)
+    _add_transition_markers(price_ax, candles, left, right)
+    _add_pivot_markers(price_ax, structure, candles, start_pos, end_pos)
+    price_ax.set_title(f"{title}\n{_summary_text(candles, left, right)}", fontsize=10)
+    price_ax.set_ylabel("USDT")
+    price_ax.grid(alpha=0.12)
+
+    _plot_behaviour_strip(state_ax, candles, left, right)
+    _plot_metric_strip(metric_ax, candles, left, right)
+    metric_ax.set_xlabel("Candle index")
+
+
+def _print_pivot_table(name: str, structure: pd.DataFrame, candles: pd.DataFrame, start_pos: int, end_pos: int) -> None:
+    table = _pivot_rows(structure, start_pos, end_pos, candles)
+    print(f"\n{name}")
+    print(table.to_string(index=False, formatters={
+        "body": "{:.0f}%".format,
+        "upper": "{:.0f}%".format,
+        "lower": "{:.0f}%".format,
+        "range_x": "{:.1f}x".format,
+    }))
 
 
 def create_chart(
@@ -200,7 +265,12 @@ def create_chart(
     if len(structure) < pivots * 2:
         raise ValueError(f"Not enough confirmed pivots: {len(structure)}")
 
-    matches = find_similar_structures(structure, n_pivots=pivots, top_k=top_k, minimum_similarity=minimum_similarity)
+    matches = find_similar_structures(
+        structure,
+        n_pivots=pivots,
+        top_k=top_k,
+        minimum_similarity=minimum_similarity,
+    )
     if matches.empty:
         raise ValueError("No historical matches met the requested similarity threshold")
 
@@ -211,14 +281,28 @@ def create_chart(
     current_left = max(0, current_start_index - context_candles)
     current_right = min(len(candles) - 1, current_end_index + max(3, context_candles // 3))
 
-    n_panels = 1 + len(matches)
-    fig, axes = plt.subplots(n_panels, 2, figsize=(20, 4.8 * n_panels), gridspec_kw={"width_ratios": [4, 1.6]}, squeeze=False)
+    rows = 1 + len(matches)
+    fig, axes = plt.subplots(
+        rows * 3,
+        1,
+        figsize=(19, 4.6 * rows),
+        gridspec_kw={"height_ratios": sum(([3.4, 1.0, 1.2] for _ in range(rows)), [])},
+        squeeze=False,
+    )
+    flat = axes[:, 0]
 
-    _plot_candles(axes[0, 0], candles, current_left, current_right)
-    _add_context_band(axes[0, 0], candles, current_left, current_right)
-    _annotate(axes[0, 0], structure, candles, current_start_pos, current_end_pos, "CURRENT — actual OHLC candles")
-    _plot_feature_strip(axes[0, 1], candles, current_left, current_right)
-    axes[0, 0].set_ylabel("USDT")
+    panel_axes = flat[0:3]
+    _render_panel(
+        panel_axes,
+        candles,
+        structure,
+        current_start_pos,
+        current_end_pos,
+        current_left,
+        current_right,
+        "CURRENT — actual candle behaviour",
+    )
+    _print_pivot_table("CURRENT pivot candle anatomy", structure, candles, current_start_pos, current_end_pos)
 
     for panel, (_, match) in enumerate(matches.iterrows(), start=1):
         end_pos = int(match["candidate_end_position"])
@@ -227,22 +311,26 @@ def create_chart(
         end_index = int(structure.iloc[end_pos]["index"])
         left = max(0, start_index - context_candles)
         right = min(len(candles) - 1, end_index + max(3, context_candles // 3))
-        ax = axes[panel, 0]
-        _plot_candles(ax, candles, left, right)
-        _add_context_band(ax, candles, left, right)
-        _annotate(ax, structure, candles, start_pos, end_pos, f"HISTORICAL MATCH #{panel} — similarity {float(match['similarity']):.4f}")
-        _plot_feature_strip(axes[panel, 1], candles, left, right)
-        ax.set_ylabel("USDT")
+        panel_axes = flat[panel * 3:(panel + 1) * 3]
+        _render_panel(
+            panel_axes,
+            candles,
+            structure,
+            start_pos,
+            end_pos,
+            left,
+            right,
+            f"HISTORICAL MATCH #{panel} — structural similarity {float(match['similarity']):.4f}",
+        )
+        _print_pivot_table(f"MATCH #{panel} pivot candle anatomy", structure, candles, start_pos, end_pos)
 
     fig.suptitle(
-        f"{cfg.symbol} {timeframe} — Candle Behaviour Study\n"
-        f"Actual OHLC anatomy + structural context | ZigZag {threshold:.2f}% | {pivots} pivots | min similarity {minimum_similarity:.2f}\n"
-        "Compression/expansion markings are descriptive measurements, not signals or predictions.",
+        f"{cfg.symbol} {timeframe} — Candle Behaviour Research\n"
+        f"Actual OHLC candles + behaviour states + structural context | ZigZag {threshold:.2f}% | {pivots} pivots\n"
+        "Behaviour states are descriptive measurements, not trading signals, outcomes, or predictions.",
         fontsize=14,
         fontweight="bold",
     )
-    axes[-1, 0].set_xlabel("Candle index (database row)")
-    axes[-1, 1].set_xlabel("Candle index")
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=150, bbox_inches="tight")
@@ -254,7 +342,7 @@ def create_chart(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Study actual ETH candle behaviour around structural patterns.")
+    parser = argparse.ArgumentParser(description="Research actual ETH candle behaviour around structural patterns.")
     parser.add_argument("--timeframe", default="1h")
     parser.add_argument("--threshold", type=float, default=1.0)
     parser.add_argument("--pivots", type=int, default=8)
