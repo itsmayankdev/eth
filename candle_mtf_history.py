@@ -23,7 +23,7 @@ DEFAULT_STEP = 20
 ANCHOR_TF = "1h"
 
 # Approximate candle duration in milliseconds. Used only to prevent a matched
-# timeframe from being aligned to a candle that starts after the anchor time.
+# timeframe from being aligned to a candle that starts too far before the anchor.
 TF_MS = {
     "1m": 60_000,
     "3m": 3 * 60_000,
@@ -83,22 +83,17 @@ def similarity(current: np.ndarray, history: np.ndarray) -> np.ndarray:
 
 
 def floor_index(times: np.ndarray, target: int) -> int | None:
-    """Return the latest candle start at or before target, never a future candle."""
+    """Return latest candle-start at or before target."""
     pos = int(np.searchsorted(times, target, side="right")) - 1
-    if pos < 0:
-        return None
-    return pos
+    return pos if pos >= 0 else None
 
 
 def aligned_index(times: np.ndarray, target: int, timeframe: str) -> int | None:
-    """Map an anchor timestamp to the same historical period without look-ahead."""
+    """Align each timeframe to the same historical anchor without look-ahead."""
     pos = floor_index(times, target)
     if pos is None:
         return None
-
     lag = int(target) - int(times[pos])
-    # The aligned candle should be within roughly one candle duration of the
-    # anchor. This rejects accidental matches across large data gaps.
     if lag > int(TF_MS[timeframe] * 1.5):
         return None
     return pos
@@ -117,6 +112,7 @@ def run(window: int, top_k: int, step: int, output_dir: str):
         df = db.load_candles("ETHUSDT", tf)
         if len(df) < window:
             continue
+        df = df.sort_values("open_time").reset_index(drop=True)
         feats = candle_features(df)
         matrix, starts = build_history(feats, window, step)
         current = feature_vector(feats, len(feats) - window, window)
@@ -157,7 +153,6 @@ def run(window: int, top_k: int, step: int, output_dir: str):
     current_df = pd.DataFrame(current_rows)
 
     anchor = data[ANCHOR_TF]
-    # Exclude the latest current window itself.
     current_anchor_start = len(anchor["df"]) - window
     valid = anchor["starts"] != current_anchor_start
     order = np.argsort(anchor["similarity"])[::-1]
@@ -167,11 +162,7 @@ def run(window: int, top_k: int, step: int, output_dir: str):
     skipped = 0
     for rank, i in enumerate(order[:500], 1):
         anchor_ts = int(anchor["times"][i])
-        row = {
-            "anchor_rank_1h": rank,
-            "anchor_timestamp_1h": anchor_ts,
-            "combined_similarity": 0.0,
-        }
+        row = {"anchor_rank_1h": rank, "anchor_timestamp_1h": anchor_ts}
         scores = []
         aligned_ok = True
 
@@ -183,31 +174,33 @@ def run(window: int, top_k: int, step: int, output_dir: str):
             if j is None:
                 aligned_ok = False
                 break
-            score = float(item["similarity"][j])
-            row[f"{tf}_similarity"] = score
+            row[f"{tf}_similarity"] = float(item["similarity"][j])
             row[f"{tf}_timestamp"] = int(item["times"][j])
-            scores.append(score)
+            scores.append(float(item["similarity"][j]))
 
-        if not aligned_ok or not scores:
+        if not aligned_ok or len(scores) != len(TIMEFRAMES):
             skipped += 1
             continue
 
-        # Every timeframe now refers to a candle window ending at or immediately
-        # before the same 1h anchor period. No future timestamp is used.
         row["combined_similarity"] = float(np.mean(scores))
+        row["max_alignment_gap_ms"] = max(anchor_ts - row[f"{tf}_timestamp"] for tf in TIMEFRAMES)
+        row["alignment_status"] = "SYNCHRONIZED"
         results.append(row)
 
-    matches = pd.DataFrame(results).sort_values("combined_similarity", ascending=False).head(top_k)
+    if not results:
+        raise RuntimeError("No synchronized historical multi-timeframe windows found")
+
+    matches = pd.DataFrame(results).sort_values("combined_similarity", ascending=False).head(top_k).reset_index(drop=True)
     current_df["research_note"] = "Descriptive candle-behaviour comparison only"
     matches["research_note"] = "Synchronized historical multi-timeframe similarity; not a forecast"
 
     current_df.to_csv(out / "candle_mtf_history_current.csv", index=False)
     matches.to_csv(out / "candle_mtf_history_matches.csv", index=False)
 
-    print("\nMULTI-TIMEFRAME HISTORICAL CANDLE BEHAVIOUR RESEARCH\n")
+    print("\nMULTI-TIMEFRAME SYNCHRONIZED HISTORICAL CANDLE BEHAVIOUR RESEARCH\n")
     print(current_df.to_string(index=False))
     print("\nTOP SYNCHRONIZED HISTORICAL MULTI-TIMEFRAME WINDOWS\n")
-    cols = ["anchor_rank_1h", "anchor_timestamp_1h", "combined_similarity"]
+    cols = ["anchor_rank_1h", "anchor_timestamp_1h", "combined_similarity", "max_alignment_gap_ms"]
     cols += [f"{tf}_similarity" for tf in TIMEFRAMES if tf in data]
     print(matches[cols].to_string(index=False))
     print(f"\nCandidate windows skipped for alignment gaps: {skipped}")
