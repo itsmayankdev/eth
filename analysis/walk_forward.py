@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from math import ceil, log
+from math import ceil
+from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
@@ -18,14 +19,7 @@ def wilson_interval(successes: int, trials: int, confidence_level: float = 0.95)
     if not 0.0 < confidence_level < 1.0:
         raise ValueError("confidence_level must be between 0 and 1")
 
-    # Normal quantile for the requested two-sided confidence level.
-    # Statistics/normal libraries are intentionally avoided to keep dependencies small.
-    p = (1.0 + confidence_level) / 2.0
-    a = log(1.0 / (1.0 - p))
-    b = log(1.0 / p)
-    z = np.sqrt(2.0) * _erfinv(2.0 * p - 1.0)
-    z = float(z)
-
+    z = NormalDist().inv_cdf((1.0 + confidence_level) / 2.0)
     phat = successes / trials
     z2 = z * z
     denominator = 1.0 + z2 / trials
@@ -34,21 +28,12 @@ def wilson_interval(successes: int, trials: int, confidence_level: float = 0.95)
     return (max(0.0, center - margin), min(1.0, center + margin))
 
 
-def _erfinv(x: float) -> float:
-    """Approximate inverse error function using Winitzki's formula."""
-    x = float(np.clip(x, -0.999999, 0.999999))
-    a = 0.147
-    ln = np.log(1.0 - x * x)
-    first = 2.0 / (np.pi * a) + ln / 2.0
-    return float(np.sign(x) * np.sqrt(np.sqrt(first * first - ln / a) - first))
-
-
 def summarize_outcomes_with_ci(
     outcomes: pd.DataFrame,
     horizons: tuple[int, ...],
     confidence_level: float = 0.95,
 ) -> pd.DataFrame:
-    """Add Wilson intervals for both all-sample and decisive target rates."""
+    """Add Wilson intervals for all-sample and decisive target rates."""
     summary = summarize_outcomes(outcomes, horizons)
     if summary.empty:
         return summary
@@ -96,7 +81,6 @@ def _sample_endpoint_positions(
     if len(eligible) <= max_samples:
         candidates = eligible
     else:
-        # Start with evenly distributed candidates, then enforce spacing in time.
         stride = max(1, ceil(len(eligible) / max_samples))
         candidates = eligible[::stride]
         if len(candidates) > max_samples:
@@ -122,10 +106,10 @@ def evaluate_walk_forward(
     max_samples: int = 250,
     spacing_candles: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Run repeated historical structure matching with strictly-forward outcomes.
+    """Run repeated historical matching with strictly-forward outcomes.
 
-    Each evaluation endpoint uses only pivots confirmed by that endpoint. Its
-    top-K historical matches are evaluated after their own confirmation candle.
+    Each endpoint uses only pivots confirmed by that endpoint. Its top-K
+    historical matches are evaluated after their own confirmation candle.
     Endpoint samples are spaced by at least the maximum outcome horizon by
     default, reducing overlapping forward windows in the aggregate.
     """
