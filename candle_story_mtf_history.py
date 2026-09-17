@@ -53,14 +53,14 @@ def seq_similarity(a: list[str], b: list[str]) -> float:
     dp = np.zeros((n + 1, m + 1), dtype=float)
     dp[:, 0] = np.arange(n + 1, dtype=float)
     dp[0, :] = np.arange(m + 1, dtype=float)
-    related = {
-        frozenset(("LEVEL_INTERACTION", "REJECTION")),
-        frozenset(("LEVEL_INTERACTION", "PULLBACK")),
-        frozenset(("REJECTION", "HOLD")),
-        frozenset(("RANGE_CHANGE", "BODY_CHANGE")),
-        frozenset(("DIRECTION_CHANGE", "BODY_CHANGE")),
-        frozenset(("LEVEL_INTERACTION", "EXPANSION_AFTER_TEST")),
-    }
+    related = {frozenset(x) for x in [
+        ("LEVEL_INTERACTION", "REJECTION"),
+        ("LEVEL_INTERACTION", "PULLBACK"),
+        ("REJECTION", "HOLD"),
+        ("RANGE_CHANGE", "BODY_CHANGE"),
+        ("DIRECTION_CHANGE", "BODY_CHANGE"),
+        ("LEVEL_INTERACTION", "EXPANSION_AFTER_TEST"),
+    ]}
     for i in range(1, n + 1):
         for j in range(1, m + 1):
             x, y = a[i - 1], b[j - 1]
@@ -75,7 +75,8 @@ def exact_index(closes: np.ndarray, ts: int) -> int | None:
 
 
 def build_story(df: pd.DataFrame, start: int, end: int) -> list[str]:
-    _, events, _ = analyse_window(df, start, end)
+    # analyse_window returns exactly (summary, events).
+    _, events = analyse_window(df, start, end)
     return raw_story_tokens(df, start, end, events)
 
 
@@ -83,8 +84,8 @@ def run(window: int, top_k: int, screen_pool: int, output_dir: str) -> None:
     if window < 4 or window % 2: raise ValueError("window must be an even number >= 4")
     out = Path(output_dir); out.mkdir(exist_ok=True)
     cfg = load_config()
-
     data = {}
+
     for tf in TIMEFRAMES:
         df = load_market(cfg, tf)
         if len(df) < window: continue
