@@ -33,11 +33,23 @@ class SimilarityConfig:
             raise ValueError("similarity scales must be greater than 0")
 
 
+def _finite_numeric(values: pd.Series | np.ndarray, default: float = 0.0) -> np.ndarray:
+    """Convert pandas/numpy numeric values, including pd.NA, into finite floats."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    array = np.asarray(numeric, dtype=float)
+    return np.nan_to_num(array, nan=default, posinf=default, neginf=default)
+
+
 def _numeric_similarity(a: np.ndarray, b: np.ndarray, scale: float) -> float:
     """Convert absolute numeric differences into a [0, 1] similarity."""
     if len(a) == 0:
         return 0.0
-    diff = np.nan_to_num(np.abs(a - b), nan=scale * 10.0, posinf=scale * 10.0, neginf=scale * 10.0)
+    diff = np.nan_to_num(
+        np.abs(a - b),
+        nan=scale * 10.0,
+        posinf=scale * 10.0,
+        neginf=scale * 10.0,
+    )
     return float(np.exp(-np.mean(diff) / scale))
 
 
@@ -71,23 +83,34 @@ def structure_similarity(
     left = current.reset_index(drop=True)
     right = candidate.reset_index(drop=True)
 
-    type_similarity = float(np.mean(left["pivot_type"].astype(str).to_numpy() == right["pivot_type"].astype(str).to_numpy()))
+    type_similarity = float(
+        np.mean(
+            left["pivot_type"].astype("string").fillna("?").to_numpy()
+            == right["pivot_type"].astype("string").fillna("?").to_numpy()
+        )
+    )
     swing_similarity = _numeric_similarity(
-        left["swing_pct"].to_numpy(float), right["swing_pct"].to_numpy(float), cfg.swing_scale_pct
+        _finite_numeric(left["swing_pct"]),
+        _finite_numeric(right["swing_pct"]),
+        cfg.swing_scale_pct,
     )
     leg_similarity = _numeric_similarity(
-        left["leg_pct"].to_numpy(float), right["leg_pct"].to_numpy(float), cfg.leg_scale_pct
+        _finite_numeric(left["leg_pct"]),
+        _finite_numeric(right["leg_pct"]),
+        cfg.leg_scale_pct,
     )
     duration_similarity = _duration_similarity(
-        left["bars_since_prev"].to_numpy(float), right["bars_since_prev"].to_numpy(float), cfg.duration_scale
+        _finite_numeric(left["bars_since_prev"], default=1.0),
+        _finite_numeric(right["bars_since_prev"], default=1.0),
+        cfg.duration_scale,
     )
 
     # Re-anchor both shapes to their final pivot so absolute price level cannot
     # influence matching. The final pivot is therefore always exactly 1.0.
-    left_shape = left["normalized_price"].to_numpy(float)
-    right_shape = right["normalized_price"].to_numpy(float)
-    left_shape = left_shape / left_shape[-1]
-    right_shape = right_shape / right_shape[-1]
+    left_shape = _finite_numeric(left["normalized_price"], default=1.0)
+    right_shape = _finite_numeric(right["normalized_price"], default=1.0)
+    left_shape = left_shape / max(abs(left_shape[-1]), 1e-12)
+    right_shape = right_shape / max(abs(right_shape[-1]), 1e-12)
     shape_similarity = _numeric_similarity(left_shape, right_shape, 0.05)
 
     return float(
@@ -151,7 +174,7 @@ def find_similar_structures(
                 "candidate_start_position": int(end_pos - n_pivots + 1),
                 "candidate_end_position": int(end_pos),
                 "similarity": score,
-                "pivot_type_sequence": " ".join(candidate["pivot_type"].astype(str)),
+                "pivot_type_sequence": " ".join(candidate["pivot_type"].astype("string").fillna("?").to_numpy()),
             }
         )
 
