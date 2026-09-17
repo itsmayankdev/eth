@@ -20,7 +20,7 @@ class OutcomeConfig:
 
 
 def _forward_window(candles: pd.DataFrame, endpoint_index: int, horizon: int) -> pd.DataFrame:
-    """Return candles strictly after the historical match endpoint."""
+    """Return candles strictly after the signal/entry candle."""
     if candles.empty or horizon <= 0:
         return candles.iloc[0:0]
     if "index" in candles.columns:
@@ -36,13 +36,11 @@ def measure_match_outcome(
     target_pct: float = 1.0,
     stop_pct: float = 0.5,
 ) -> dict:
-    """Measure forward returns, MFE/MAE and target/stop outcomes.
+    """Measure returns, MFE/MAE and target/stop outcomes after a causal entry.
 
-    The entry is the matched pivot price. Forward candles begin strictly after
-    the matched pivot, so candles used to construct the pattern are excluded.
-    MFE/MAE are measured from candle high/low. If target and stop are both hit
-    inside the same candle, the result is marked ambiguous because OHLC data
-    cannot establish intrabar order.
+    ``endpoint_index`` is the candle where the signal is available. Forward
+    candles begin strictly after it. The caller should use the ZigZag
+    ``confirmation_index`` rather than the earlier pivot index.
     """
     result: dict = {"endpoint_index": int(endpoint_index), "entry_price": float(entry_price)}
     target = float(entry_price) * (1.0 + target_pct / 100.0)
@@ -61,7 +59,6 @@ def measure_match_outcome(
     highs = pd.to_numeric(future["high"], errors="coerce").to_numpy(float)
     lows = pd.to_numeric(future["low"], errors="coerce").to_numpy(float)
     closes = pd.to_numeric(future["close"], errors="coerce").to_numpy(float)
-
     up = (highs / entry_price - 1.0) * 100.0
     down = (lows / entry_price - 1.0) * 100.0
 
@@ -109,25 +106,35 @@ def evaluate_matches(
     structure: pd.DataFrame,
     config: OutcomeConfig | None = None,
 ) -> pd.DataFrame:
-    """Attach forward outcomes to similarity matches."""
+    """Attach strictly-forward outcomes using each match's confirmation candle.
+
+    Entry is the close of the confirmation candle. This avoids assuming that a
+    historical pivot price was tradable before the reversal had been confirmed.
+    """
     cfg = config or OutcomeConfig()
     if matches.empty:
         return matches.copy()
 
     rows: list[dict] = []
+    closes = pd.to_numeric(candles["close"], errors="coerce").to_numpy(float)
     for _, match in matches.iterrows():
         end_pos = int(match["candidate_end_position"])
         pivot = structure.iloc[end_pos]
+        confirmation_index = int(match.get("candidate_confirmation_index", pivot["confirmation_index"]))
+        if confirmation_index < 0 or confirmation_index >= len(closes) or not np.isfinite(closes[confirmation_index]):
+            continue
+        entry_price = float(closes[confirmation_index])
         outcome = measure_match_outcome(
             candles,
-            int(match["candidate_end_index"]),
-            float(pivot["price"]),
+            confirmation_index,
+            entry_price,
             cfg.horizons,
             cfg.target_pct,
             cfg.stop_pct,
         )
         row = match.to_dict()
         row.update(outcome)
+        row["entry_index"] = confirmation_index
         rows.append(row)
     return pd.DataFrame(rows)
 
