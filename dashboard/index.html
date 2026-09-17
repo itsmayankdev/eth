@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ETH Candle Behaviour Research</title>
+<style>
+:root{--bg:#0b1020;--panel:#121a2b;--panel2:#182238;--text:#edf2ff;--muted:#93a1bd;--line:#27334c;--accent:#72a7ff;--good:#61d6a0;--warn:#f0c36b;--bad:#ef8c9a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}.wrap{max-width:1500px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:18px}.title h1{margin:0 0 5px;font-size:28px}.title p{margin:0;color:var(--muted)}.status{background:var(--panel);border:1px solid var(--line);padding:10px 14px;border-radius:12px;color:var(--good)}.nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}.nav button{border:1px solid var(--line);background:var(--panel);color:var(--muted);padding:9px 13px;border-radius:9px;cursor:pointer}.nav button.active{background:var(--panel2);color:var(--text);border-color:var(--accent)}.page{display:none}.page.active{display:block}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:15px}.card h3{margin:0 0 8px;font-size:13px;color:var(--muted);font-weight:600}.big{font-size:25px;font-weight:700}.small{font-size:12px;color:var(--muted)}.section{margin:18px 0}.section h2{font-size:18px;margin:0 0 10px}.tf-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.tf-card{min-height:190px}.tf-card .story{color:#dce7ff;margin:10px 0;font-size:13px}.pill{display:inline-block;border:1px solid var(--line);padding:3px 7px;border-radius:999px;margin:2px 3px 2px 0;color:var(--muted);font-size:11px}.table-wrap{overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px}.table{width:100%;border-collapse:collapse;min-width:850px}.table th,.table td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}.table th{color:var(--muted);font-size:12px;position:sticky;top:0;background:var(--panel2)}.table tr:last-child td{border-bottom:0}.storyline{color:#dce7ff}.storyline span{color:var(--accent)}.note{padding:12px 14px;border-left:3px solid var(--accent);background:var(--panel);color:var(--muted);border-radius:8px}.images{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.images img{width:100%;border:1px solid var(--line);border-radius:12px;background:#fff}.select{background:var(--panel);border:1px solid var(--line);color:var(--text);padding:8px;border-radius:8px}.error{color:var(--bad)}@media(max-width:1000px){.grid,.tf-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.images{grid-template-columns:1fr}}@media(max-width:600px){.grid,.tf-grid{grid-template-columns:1fr}.wrap{padding:12px}.top{flex-direction:column}.title h1{font-size:23px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="title"><h1>ETH Candle Behaviour Research</h1><p>One place to understand the current candle structure, stories, levels, transitions and historical matches.</p></div>
+    <div class="status" id="status">Loading research files…</div>
+  </div>
+  <div class="nav" id="nav"></div>
+
+  <section class="page active" id="overview">
+    <div class="grid" id="overviewCards"></div>
+    <div class="section"><h2>How to read this dashboard</h2><div class="note">Start with <b>Current</b> to see what each timeframe is doing now. Then use <b>Stories</b> to read the candle sequence as a simple narrative. <b>History</b> shows the closest synchronized historical states. <b>Levels & Transitions</b> explains interaction and behaviour changes. This is descriptive research — it does not produce trade signals or forecasts.</div></div>
+    <div class="section"><h2>Timeframe map</h2><div class="tf-grid" id="overviewTf"></div></div>
+  </section>
+
+  <section class="page" id="current"><div class="section"><h2>Current market behaviour</h2><div class="tf-grid" id="currentTf"></div></div></section>
+
+  <section class="page" id="stories"><div class="section"><h2>Current candle stories</h2><div class="table-wrap"><table class="table" id="storyTable"></table></div></div><div class="section"><h2>Recurring story archetypes</h2><div class="table-wrap"><table class="table" id="archetypeTable"></table></div></div></section>
+
+  <section class="page" id="history"><div class="section"><h2>Historical synchronized replay</h2><div class="grid" id="historyCards"></div></div><div class="section"><h2>Top historical states</h2><div class="table-wrap"><table class="table" id="historyTable"></table></div></div><div class="section images"><div><h2>Story similarity map</h2><img src="../charts/candle_story_mtf_history_map_1h.png" onerror="this.style.display='none'"></div><div><h2>Archetype map</h2><img src="../charts/candle_story_archetype_map.png" onerror="this.style.display='none'"></div></div></section>
+
+  <section class="page" id="levels"><div class="section"><h2>Price-level behaviour</h2><div class="table-wrap"><table class="table" id="levelTable"></table></div></div><div class="section"><h2>Behaviour transitions</h2><div class="table-wrap"><table class="table" id="transitionTable"></table></div></div></section>
+
+  <section class="page" id="data"><div class="section"><h2>Research outputs</h2><div class="table-wrap"><table class="table" id="fileTable"></table></div></div></section>
+</div>
+<script>
+const TF=['1m','3m','5m','15m','30m','1h','4h','1d'];
+const files={
+ storyCurrent:'../charts/candle_story_current.csv', mtfCurrent:'../charts/candle_story_mtf_history_current_1h.csv', mtfMatches:'../charts/candle_story_mtf_history_matches_1h.csv', mtfMatrix:'../charts/candle_story_mtf_history_matrix_1h.csv', levelCurrent:'../charts/price_level_current.csv', transitionCurrent:'../charts/candle_transition_current.csv', archetypes:'../charts/candle_story_archetype_summary.csv', archetypeMembers:'../charts/candle_story_archetype_members.csv', archetypeTransitions:'../charts/candle_story_archetype_transitions.csv'
+};
+const data={};
+function csv(text){const rows=[];let row=[],cell='',q=false;for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1];if(c==='"'){if(q&&n==='"'){cell+='"';i++;}else q=!q}else if(c===','&&!q){row.push(cell);cell=''}else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&n==='\n')i++;row.push(cell);cell='';if(row.some(x=>x!==''))rows.push(row);row=[]}else cell+=c}if(cell!==''||row.length){row.push(cell);if(row.some(x=>x!==''))rows.push(row)}if(!rows.length)return[];const h=rows[0];return rows.slice(1).map(r=>Object.fromEntries(h.map((k,i)=>[k,r[i]??''])))}
+async function load(key,path){try{const r=await fetch(path);if(!r.ok)throw Error(r.status);data[key]=csv(await r.text());return true}catch(e){data[key]=[];return false}}
+function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function story(s){return esc(s||'').replaceAll(' -> ',' <span>→</span> ')}
+function table(el,rows,cols){if(!rows.length){el.innerHTML='<tr><td class="small">No data available.</td></tr>';return}el.innerHTML='<thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+cols.map(c=>`<td>${c.toLowerCase().includes('story')?story(r[c]):esc(r[c])}</td>`).join('')+'</tr>').join('')+'</tbody>'}
+function first(a,key,val){return a.find(x=>String(x[key])===String(val))||{}}
+function tfCard(tf,row){return `<div class="card tf-card"><h3>${tf}</h3><div class="small">Current story</div><div class="storyline">${story(row?.current_family_story||row?.current_story||'No data')}</div><div>${(row?.role||'').split('_').map(x=>`<span class="pill">${esc(x)}</span>`).join('')}</div></div>`}
+function render(){
+ const mtf=data.mtfCurrent||[], sc=data.storyCurrent||[], lv=data.levelCurrent||[], tr=data.transitionCurrent||[], ar=data.archetypes||[], mm=data.mtfMatches||[];
+ document.getElementById('status').textContent='Research files loaded';
+ document.getElementById('overviewCards').innerHTML=[['Timeframes','8'],['Historical hourly states','125 synchronized states'],['Current window','20 candles'],['Research scope','Descriptive only']].map(x=>`<div class="card"><h3>${x[0]}</h3><div class="big">${x[1]}</div></div>`).join('');
+ const rows=TF.map(tf=>first(mtf,'timeframe',tf));
+ document.getElementById('overviewTf').innerHTML=rows.map((r,i)=>tfCard(TF[i],r)).join('');
+ document.getElementById('currentTf').innerHTML=rows.map((r,i)=>{const l=first(lv,'timeframe',TF[i]),t=first(tr,'timeframe',TF[i]);return `<div class="card tf-card"><h3>${TF[i]}</h3><div class="storyline">${story(r.current_family_story||first(sc,'timeframe',TF[i]).current_family_story||'')}</div><div class="small">${esc(t.transition||t.story||'Transition data unavailable')}</div><div style="margin-top:9px"><span class="pill">Levels: ${esc(l.level_count||'—')}</span><span class="pill">Interactions: ${esc(l.interaction_count||'—')}</span><span class="pill">Rejections: ${esc(l.rejection_count||'—')}</span><span class="pill">Pullbacks: ${esc(l.pullback_count||'—')}</span></div></div>`}).join('');
+ table(document.getElementById('storyTable'),sc,['timeframe','current_family_story','current_story']);
+ table(document.getElementById('archetypeTable'),ar.slice(0,20),Object.keys(ar[0]||{}).slice(0,6));
+ const top=mm.slice(0,25); document.getElementById('historyCards').innerHTML=[['States in current replay','125'],['Top displayed','25'],['Core synchronization','1m–4h exact'],['Daily context','1d latest completed']].map(x=>`<div class="card"><h3>${x[0]}</h3><div class="big">${x[1]}</div></div>`).join('');
+ table(document.getElementById('historyTable'),top,['rank','reference_timestamp','combined_similarity','cross_tf_candle_similarity','cross_tf_story_similarity','alignment_status']);
+ table(document.getElementById('levelTable'),lv,['timeframe','level_count','interaction_count','break_count','hold_count','rejection_count','pullback_count','repeated_level_tests','reaction_expansion_count','story']);
+ table(document.getElementById('transitionTable'),tr,['timeframe','transition','first_direction_balance','second_direction_balance','range_shift']);
+ const outputNames=Object.entries(files).map(([k,p])=>({file:p.split('/').pop(),source:k}));
+ table(document.getElementById('fileTable'),outputNames,['file','source']);
+}
+function nav(){const items=[['overview','Overview'],['current','Current'],['stories','Stories'],['history','History'],['levels','Levels & Transitions'],['data','Data']];const n=document.getElementById('nav');n.innerHTML=items.map(([id,t],i)=>`<button class="${i?'':'active'}" data-page="${id}">${t}</button>`).join('');n.querySelectorAll('button').forEach(b=>b.onclick=()=>{n.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id===b.dataset.page))})}
+(async()=>{nav();const ok=await Promise.all(Object.entries(files).map(([k,p])=>load(k,p)));render();if(ok.filter(Boolean).length<ok.length){document.getElementById('status').className='status error';document.getElementById('status').textContent='Some research files are missing — dashboard is partial';}})();
+</script>
+</body>
+</html>
