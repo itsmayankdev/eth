@@ -1,9 +1,9 @@
 """Historical multi-timeframe candle-behaviour relationship research.
 
 Descriptive research only. Finds historical periods whose candle behaviour,
-independently measured on each timeframe, resembles the current multi-timeframe
-configuration. It does not create trades, targets, stops, outcomes, or future-
-direction predictions.
+measured across all available timeframes over the same historical time window,
+resembles the current multi-timeframe configuration. It does not create trades,
+targets, stops, outcomes, or future-direction predictions.
 """
 from __future__ import annotations
 
@@ -21,6 +21,19 @@ DEFAULT_WINDOW = 20
 DEFAULT_TOP_K = 25
 DEFAULT_STEP = 20
 ANCHOR_TF = "1h"
+
+# Approximate candle duration in milliseconds. Used only to prevent a matched
+# timeframe from being aligned to a candle that starts after the anchor time.
+TF_MS = {
+    "1m": 60_000,
+    "3m": 3 * 60_000,
+    "5m": 5 * 60_000,
+    "15m": 15 * 60_000,
+    "30m": 30 * 60_000,
+    "1h": 60 * 60_000,
+    "4h": 4 * 60 * 60_000,
+    "1d": 24 * 60 * 60_000,
+}
 
 
 def feature_vector(features: pd.DataFrame, start: int, window: int) -> np.ndarray:
@@ -69,13 +82,26 @@ def similarity(current: np.ndarray, history: np.ndarray) -> np.ndarray:
     return np.exp(-dist)
 
 
-def nearest_index(times: np.ndarray, target: int) -> int:
-    pos = int(np.searchsorted(times, target))
-    if pos <= 0:
-        return 0
-    if pos >= len(times):
-        return len(times) - 1
-    return pos if abs(int(times[pos]) - target) < abs(target - int(times[pos - 1])) else pos - 1
+def floor_index(times: np.ndarray, target: int) -> int | None:
+    """Return the latest candle start at or before target, never a future candle."""
+    pos = int(np.searchsorted(times, target, side="right")) - 1
+    if pos < 0:
+        return None
+    return pos
+
+
+def aligned_index(times: np.ndarray, target: int, timeframe: str) -> int | None:
+    """Map an anchor timestamp to the same historical period without look-ahead."""
+    pos = floor_index(times, target)
+    if pos is None:
+        return None
+
+    lag = int(target) - int(times[pos])
+    # The aligned candle should be within roughly one candle duration of the
+    # anchor. This rejects accidental matches across large data gaps.
+    if lag > int(TF_MS[timeframe] * 1.5):
+        return None
+    return pos
 
 
 def run(window: int, top_k: int, step: int, output_dir: str):
@@ -138,6 +164,7 @@ def run(window: int, top_k: int, step: int, output_dir: str):
     order = [int(i) for i in order if valid[int(i)]]
 
     results = []
+    skipped = 0
     for rank, i in enumerate(order[:500], 1):
         anchor_ts = int(anchor["times"][i])
         row = {
@@ -146,31 +173,44 @@ def run(window: int, top_k: int, step: int, output_dir: str):
             "combined_similarity": 0.0,
         }
         scores = []
+        aligned_ok = True
+
         for tf in TIMEFRAMES:
             if tf not in data:
                 continue
             item = data[tf]
-            j = nearest_index(item["times"], anchor_ts)
+            j = aligned_index(item["times"], anchor_ts, tf)
+            if j is None:
+                aligned_ok = False
+                break
             score = float(item["similarity"][j])
             row[f"{tf}_similarity"] = score
             row[f"{tf}_timestamp"] = int(item["times"][j])
             scores.append(score)
+
+        if not aligned_ok or not scores:
+            skipped += 1
+            continue
+
+        # Every timeframe now refers to a candle window ending at or immediately
+        # before the same 1h anchor period. No future timestamp is used.
         row["combined_similarity"] = float(np.mean(scores))
         results.append(row)
 
     matches = pd.DataFrame(results).sort_values("combined_similarity", ascending=False).head(top_k)
     current_df["research_note"] = "Descriptive candle-behaviour comparison only"
-    matches["research_note"] = "Historical multi-timeframe similarity; not a forecast"
+    matches["research_note"] = "Synchronized historical multi-timeframe similarity; not a forecast"
 
     current_df.to_csv(out / "candle_mtf_history_current.csv", index=False)
     matches.to_csv(out / "candle_mtf_history_matches.csv", index=False)
 
     print("\nMULTI-TIMEFRAME HISTORICAL CANDLE BEHAVIOUR RESEARCH\n")
     print(current_df.to_string(index=False))
-    print("\nTOP HISTORICAL MULTI-TIMEFRAME WINDOWS\n")
+    print("\nTOP SYNCHRONIZED HISTORICAL MULTI-TIMEFRAME WINDOWS\n")
     cols = ["anchor_rank_1h", "anchor_timestamp_1h", "combined_similarity"]
     cols += [f"{tf}_similarity" for tf in TIMEFRAMES if tf in data]
     print(matches[cols].to_string(index=False))
+    print(f"\nCandidate windows skipped for alignment gaps: {skipped}")
     print("\nSaved:")
     print(out / "candle_mtf_history_current.csv")
     print(out / "candle_mtf_history_matches.csv")
