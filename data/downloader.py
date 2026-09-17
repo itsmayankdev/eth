@@ -8,6 +8,21 @@ from data.validator import validate_candles
 import pandas as pd
 
 
+def _keep_latest_contiguous(rows: list[tuple], step: int) -> list[tuple]:
+    """Keep the newest contiguous candle segment when older history has a gap."""
+    if len(rows) < 2:
+        return rows
+    ordered = sorted(rows, key=lambda r: r[2])
+    timestamps = [int(r[2]) for r in ordered]
+    last_gap = -1
+    for i in range(1, len(timestamps)):
+        if timestamps[i] - timestamps[i - 1] > step:
+            last_gap = i
+    if last_gap >= 0:
+        return ordered[last_gap:]
+    return ordered
+
+
 def download_timeframe(
     db: MarketDatabase,
     client: BinanceClient,
@@ -15,11 +30,13 @@ def download_timeframe(
     timeframe: str,
     candles: int = 30_000,
 ) -> int:
-    """Download the configured number of historical closed candles.
+    """Download up to the configured number of latest closed candles.
 
-    On an empty timeframe, fetch up to ``candles`` closed candles ending at the
-    latest completed candle. If history already exists, only fetch candles after
-    the latest stored candle so routine updates remain incremental.
+    The initial request is aligned to the timeframe boundary. If the requested
+    count reaches further back than the symbol's available history, Binance
+    simply returns the available history. If an older portion contains a gap,
+    only the newest contiguous segment is retained so structural calculations
+    are not built across missing candles.
     """
     if timeframe not in INTERVAL_MS:
         raise ValueError(f"Unsupported Binance interval: {timeframe}")
@@ -31,24 +48,31 @@ def download_timeframe(
     existing = db.last_open_time(symbol, timeframe)
 
     if existing is None:
-        # Start far enough back to cover the requested number of completed
-        # candles. We trim after normalization because the current candle is
-        # intentionally excluded from the database.
-        start = now_ms - (candles + 2) * step
+        # Align to the Binance candle boundary. Exclude the currently forming
+        # candle by ending at the previous boundary.
+        latest_closed_open = (now_ms // step) * step - step
+        start = latest_closed_open - (candles - 1) * step
+        end = latest_closed_open + step - 1
     else:
         start = existing + step
+        end = now_ms
 
-    end = now_ms
-    raw = client.download_range(symbol, timeframe, start, end)
-    rows = client.normalize_klines(symbol, timeframe, raw, end)
+    raw = client.download_range(
+        symbol,
+        timeframe,
+        start,
+        end,
+        max_candles=candles + 2 if existing is None else None,
+    )
+    rows = client.normalize_klines(symbol, timeframe, raw, now_ms)
 
     # Never persist the currently forming candle.
     rows = [r for r in rows if r[-1] == 1]
 
-    # For an initial load, keep exactly the newest requested number of closed
-    # candles. For an incremental update, keep every newly closed candle.
-    if existing is None and len(rows) > candles:
-        rows = rows[-candles:]
+    if existing is None:
+        rows = _keep_latest_contiguous(rows, step)
+        if len(rows) > candles:
+            rows = rows[-candles:]
 
     if rows:
         check = pd.DataFrame(
