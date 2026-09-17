@@ -66,12 +66,7 @@ def structure_similarity(
     candidate: pd.DataFrame,
     config: SimilarityConfig | None = None,
 ) -> float:
-    """Return a [0, 1] similarity score for two pivot sequences.
-
-    Both sequences must contain the same number of pivots. The comparison uses
-    structure labels, swing size, leg size, pivot duration, and normalized
-    price shape. It does not use candles after either sequence's endpoint.
-    """
+    """Return a [0, 1] similarity score for two pivot sequences."""
     cfg = config or SimilarityConfig()
     required = {"pivot_type", "swing_pct", "leg_pct", "bars_since_prev", "normalized_price"}
     if not required.issubset(current.columns) or not required.issubset(candidate.columns):
@@ -105,8 +100,6 @@ def structure_similarity(
         cfg.duration_scale,
     )
 
-    # Re-anchor both shapes to their final pivot so absolute price level cannot
-    # influence matching. The final pivot is therefore always exactly 1.0.
     left_shape = _finite_numeric(left["normalized_price"], default=1.0)
     right_shape = _finite_numeric(right["normalized_price"], default=1.0)
     left_shape = left_shape / max(abs(left_shape[-1]), 1e-12)
@@ -130,18 +123,18 @@ def find_similar_structures(
     config: SimilarityConfig | None = None,
     max_endpoint_index: int | None = None,
 ) -> pd.DataFrame:
-    """Find historical matches ending before the current structure.
+    """Find historical matches that were confirmed before the current structure.
 
-    The current structure is the final ``n_pivots`` rows of ``structure``.
-    Candidate windows are required to end strictly before the current endpoint,
-    which prevents matching the current event to itself and keeps the search
-    causal. Results are sorted by descending similarity and then by recency.
+    The current structure is the final ``n_pivots`` rows. A candidate is eligible
+    only when its own final pivot was already confirmed before the current final
+    pivot became available. This keeps retrieval causal for walk-forward use.
     """
     columns = [
         "candidate_start_index",
         "candidate_end_index",
         "candidate_start_position",
         "candidate_end_position",
+        "candidate_confirmation_index",
         "similarity",
         "pivot_type_sequence",
     ]
@@ -150,18 +143,15 @@ def find_similar_structures(
 
     data = structure.reset_index(drop=True)
     current = data.tail(n_pivots).copy()
-    current_end = int(current.iloc[-1]["index"])
-    cutoff = current_end if max_endpoint_index is None else min(current_end, int(max_endpoint_index))
+    current_confirmation = int(current.iloc[-1]["confirmation_index"])
+    cutoff = current_confirmation if max_endpoint_index is None else min(current_confirmation, int(max_endpoint_index))
 
     matches: list[dict] = []
-    # The latest historical candidate can end at any confirmed pivot strictly
-    # before the current endpoint. Overlapping candidates are allowed because
-    # this function is a retrieval primitive; walk-forward evaluation can add
-    # stricter spacing rules later.
     for end_pos in range(n_pivots - 1, len(data) - n_pivots):
         candidate = data.iloc[end_pos - n_pivots + 1 : end_pos + 1].copy()
         candidate_end = int(candidate.iloc[-1]["index"])
-        if candidate_end >= cutoff:
+        candidate_confirmation = int(candidate.iloc[-1]["confirmation_index"])
+        if candidate_confirmation >= cutoff:
             continue
 
         score = structure_similarity(current, candidate, config)
@@ -173,6 +163,7 @@ def find_similar_structures(
                 "candidate_end_index": candidate_end,
                 "candidate_start_position": int(end_pos - n_pivots + 1),
                 "candidate_end_position": int(end_pos),
+                "candidate_confirmation_index": candidate_confirmation,
                 "similarity": score,
                 "pivot_type_sequence": " ".join(candidate["pivot_type"].astype("string").fillna("?").to_numpy()),
             }
