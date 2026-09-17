@@ -22,8 +22,6 @@ DEFAULT_TOP_K = 25
 DEFAULT_STEP = 20
 ANCHOR_TF = "1h"
 
-# Approximate candle duration in milliseconds. Used only to prevent a matched
-# timeframe from being aligned to a candle that starts too far before the anchor.
 TF_MS = {
     "1m": 60_000,
     "3m": 3 * 60_000,
@@ -83,13 +81,12 @@ def similarity(current: np.ndarray, history: np.ndarray) -> np.ndarray:
 
 
 def floor_index(times: np.ndarray, target: int) -> int | None:
-    """Return latest candle-start at or before target."""
     pos = int(np.searchsorted(times, target, side="right")) - 1
     return pos if pos >= 0 else None
 
 
 def aligned_index(times: np.ndarray, target: int, timeframe: str) -> int | None:
-    """Align each timeframe to the same historical anchor without look-ahead."""
+    """Align to the latest available window endpoint at/before the anchor."""
     pos = floor_index(times, target)
     if pos is None:
         return None
@@ -152,23 +149,52 @@ def run(window: int, top_k: int, step: int, output_dir: str):
         })
     current_df = pd.DataFrame(current_rows)
 
+    # Find the time period that exists in EVERY timeframe's historical windows.
+    # This is critical because the snapshots have different history lengths:
+    # 1m is much shorter than 1d. Candidate anchors outside this overlap cannot
+    # possibly produce a true all-timeframe historical comparison.
+    common_start = max(int(item["times"][0]) for item in data.values())
+    common_end = min(int(item["times"][-1]) for item in data.values())
+
+    if common_start > common_end:
+        raise RuntimeError(
+            "No common historical overlap across all timeframes: "
+            f"start={common_start}, end={common_end}"
+        )
+
     anchor = data[ANCHOR_TF]
     current_anchor_start = len(anchor["df"]) - window
-    valid = anchor["starts"] != current_anchor_start
-    order = np.argsort(anchor["similarity"])[::-1]
-    order = [int(i) for i in order if valid[int(i)]]
+    overlap_mask = (
+        (anchor["times"] >= common_start)
+        & (anchor["times"] <= common_end)
+        & (anchor["starts"] != current_anchor_start)
+    )
+    candidate_indices = np.flatnonzero(overlap_mask)
+
+    print(f"Common historical overlap: {common_start} -> {common_end}")
+    print(f"Synchronized 1h anchor candidates: {len(candidate_indices)}")
+
+    if len(candidate_indices) == 0:
+        raise RuntimeError("No synchronized historical windows in the common timeframe overlap")
+
+    # Rank ONLY candidates inside the common overlap.
+    ranked = candidate_indices[np.argsort(anchor["similarity"][candidate_indices])[::-1]]
 
     results = []
     skipped = 0
-    for rank, i in enumerate(order[:500], 1):
+    for rank, i in enumerate(ranked, 1):
         anchor_ts = int(anchor["times"][i])
-        row = {"anchor_rank_1h": rank, "anchor_timestamp_1h": anchor_ts}
+        row = {
+            "anchor_rank_1h": rank,
+            "anchor_timestamp_1h": anchor_ts,
+        }
         scores = []
         aligned_ok = True
 
         for tf in TIMEFRAMES:
             if tf not in data:
-                continue
+                aligned_ok = False
+                break
             item = data[tf]
             j = aligned_index(item["times"], anchor_ts, tf)
             if j is None:
@@ -183,14 +209,24 @@ def run(window: int, top_k: int, step: int, output_dir: str):
             continue
 
         row["combined_similarity"] = float(np.mean(scores))
-        row["max_alignment_gap_ms"] = max(anchor_ts - row[f"{tf}_timestamp"] for tf in TIMEFRAMES)
+        row["max_alignment_gap_ms"] = max(
+            anchor_ts - row[f"{tf}_timestamp"] for tf in TIMEFRAMES
+        )
         row["alignment_status"] = "SYNCHRONIZED"
         results.append(row)
 
-    if not results:
-        raise RuntimeError("No synchronized historical multi-timeframe windows found")
+        if len(results) >= max(top_k, 25):
+            break
 
-    matches = pd.DataFrame(results).sort_values("combined_similarity", ascending=False).head(top_k).reset_index(drop=True)
+    if not results:
+        raise RuntimeError("No synchronized historical multi-timeframe windows found after alignment")
+
+    matches = (
+        pd.DataFrame(results)
+        .sort_values("combined_similarity", ascending=False)
+        .head(top_k)
+        .reset_index(drop=True)
+    )
     current_df["research_note"] = "Descriptive candle-behaviour comparison only"
     matches["research_note"] = "Synchronized historical multi-timeframe similarity; not a forecast"
 
@@ -200,10 +236,15 @@ def run(window: int, top_k: int, step: int, output_dir: str):
     print("\nMULTI-TIMEFRAME SYNCHRONIZED HISTORICAL CANDLE BEHAVIOUR RESEARCH\n")
     print(current_df.to_string(index=False))
     print("\nTOP SYNCHRONIZED HISTORICAL MULTI-TIMEFRAME WINDOWS\n")
-    cols = ["anchor_rank_1h", "anchor_timestamp_1h", "combined_similarity", "max_alignment_gap_ms"]
-    cols += [f"{tf}_similarity" for tf in TIMEFRAMES if tf in data]
+    cols = [
+        "anchor_rank_1h",
+        "anchor_timestamp_1h",
+        "combined_similarity",
+        "max_alignment_gap_ms",
+    ]
+    cols += [f"{tf}_similarity" for tf in TIMEFRAMES]
     print(matches[cols].to_string(index=False))
-    print(f"\nCandidate windows skipped for alignment gaps: {skipped}")
+    print(f"\nCandidates skipped during final alignment: {skipped}")
     print("\nSaved:")
     print(out / "candle_mtf_history_current.csv")
     print(out / "candle_mtf_history_matches.csv")
