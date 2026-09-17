@@ -9,6 +9,7 @@ Architecture:
 1. Fast vectorized screening over the complete history.
 2. Detailed structural analysis on a small candidate pool.
 3. Chronological event-sequence similarity for final historical ranking.
+4. Raw level interactions are compressed into meaningful story phases.
 """
 
 import argparse
@@ -33,6 +34,8 @@ EVENT_VOCAB = [
     "BODY_EXPANSION", "BODY_COMPRESSION", "COUNTERMOVE_AND_RENEWAL",
     "LEVEL_TEST", "LEVEL_BREAK", "HOLD", "REJECTION", "PULLBACK_TO_LEVEL",
     "REPEATED_LEVEL_TEST", "POST_TEST_EXPANSION",
+    "LEVEL_INTERACTION_CLUSTER", "REJECTION_CLUSTER", "PULLBACK_CLUSTER",
+    "HOLD_CLUSTER", "REPEATED_TEST_CLUSTER", "EXPANSION_AFTER_TEST",
 ]
 EVENT_TO_ID = {x: i + 1 for i, x in enumerate(EVENT_VOCAB)}
 
@@ -78,8 +81,7 @@ def build_screen_features(df: pd.DataFrame, window: int) -> tuple[np.ndarray, li
         a = starts + (half if second else 0)
         b = starts + (window if second else half)
         return (cs[b] - cs[a]) / float(half)
-    vals = [half_mean(direction), half_mean(direction, True)]
-    first_dir, second_dir = vals
+    first_dir, second_dir = half_mean(direction), half_mean(direction, True)
     first_range, second_range = half_mean(rng), half_mean(rng, True)
     first_body, second_body = half_mean(body), half_mean(body, True)
     first_cl, second_cl = half_mean(close_loc), half_mean(close_loc, True)
@@ -133,13 +135,66 @@ def major_candle_phases(df: pd.DataFrame, start: int, end: int) -> list[str]:
     return phases
 
 
+def compress_level_events(level_events: list[dict]) -> list[str]:
+    """Turn noisy candle-by-candle interactions into meaningful story phases.
+
+    Consecutive interactions at the same structural level are grouped. The
+    chronology is retained, but repeated micro-events no longer dominate the
+    story representation.
+    """
+    if not level_events:
+        return []
+    events = sorted(level_events, key=lambda x: int(x["local_index"]))
+    phases: list[str] = []
+    cluster: list[dict] = []
+    cluster_level = None
+
+    def flush(items: list[dict]) -> None:
+        if not items:
+            return
+        interactions = [str(x.get("interaction", "")) for x in items]
+        has_repeat = any(int(x.get("repeated_test", 0)) for x in items)
+        has_expand = any(int(x.get("post_interaction_expansion", 0)) for x in items)
+        kinds = set(interactions)
+        if "PULLBACK" in kinds and len(kinds) == 1:
+            phases.append("PULLBACK_CLUSTER")
+        elif "REJECTION" in kinds and len(kinds) <= 2:
+            phases.append("REJECTION_CLUSTER")
+        elif "HOLD" in kinds and len(kinds) <= 2:
+            phases.append("HOLD_CLUSTER")
+        elif has_repeat:
+            phases.append("REPEATED_TEST_CLUSTER")
+        else:
+            phases.append("LEVEL_INTERACTION_CLUSTER")
+        if has_expand:
+            phases.append("EXPANSION_AFTER_TEST")
+
+    for ev in events:
+        level = float(ev.get("level_price", 0.0))
+        if cluster and cluster_level is not None:
+            # Same structural level, or very close to it, remains one interaction episode.
+            ref = max(abs(cluster_level), 1e-9)
+            close_level = abs(level - cluster_level) / ref <= 0.0015
+            close_time = int(ev["local_index"]) - int(cluster[-1]["local_index"]) <= 3
+            if not (close_level and close_time):
+                flush(cluster); cluster = []
+        if not cluster:
+            cluster_level = level
+        cluster.append(ev)
+    flush(cluster)
+
+    compact: list[str] = []
+    for token in phases:
+        if not compact or compact[-1] != token:
+            compact.append(token)
+    return compact
+
+
 def raw_story_tokens(df: pd.DataFrame, start: int, end: int, level_events: list[dict]) -> list[str]:
-    tokens=major_candle_phases(df,start,end)
-    for ev in sorted(level_events,key=lambda x:int(x["local_index"])):
-        mapped={"TEST":"LEVEL_TEST","PULLBACK":"PULLBACK_TO_LEVEL","REJECTION":"REJECTION","HOLD":"HOLD","BREAK":"LEVEL_BREAK"}.get(str(ev["interaction"]),str(ev["interaction"]))
-        tokens.append(mapped)
-        if int(ev.get("repeated_test",0)): tokens.append("REPEATED_LEVEL_TEST")
-        if int(ev.get("post_interaction_expansion",0)): tokens.append("POST_TEST_EXPANSION")
+    # Macro candle context is kept first; structural interactions are then
+    # represented chronologically at the episode level.
+    tokens = major_candle_phases(df, start, end)
+    tokens.extend(compress_level_events(level_events))
     compact=[]
     for token in tokens:
         if not compact or compact[-1]!=token: compact.append(token)
@@ -156,7 +211,13 @@ def sequence_signature(tokens: list[str], max_len: int = 16) -> tuple[np.ndarray
 
 def sequence_similarity(q_tokens: list[str], c_tokens: list[str]) -> float:
     if not q_tokens or not c_tokens: return 0.0
-    related={frozenset(("LEVEL_TEST","REPEATED_LEVEL_TEST")),frozenset(("RANGE_EXPANSION","BODY_EXPANSION")),frozenset(("RANGE_COMPRESSION","BODY_COMPRESSION")),frozenset(("DIRECTIONAL_SHIFT","DIRECTION_CHANGE_IN_CHARACTER"))}
+    related={
+        frozenset(("LEVEL_INTERACTION_CLUSTER","REPEATED_TEST_CLUSTER")),
+        frozenset(("REJECTION_CLUSTER","HOLD_CLUSTER")),
+        frozenset(("RANGE_EXPANSION","BODY_EXPANSION")),
+        frozenset(("RANGE_COMPRESSION","BODY_COMPRESSION")),
+        frozenset(("DIRECTIONAL_SHIFT","DIRECTION_CHANGE_IN_CHARACTER")),
+    }
     def sub_cost(a,b):
         if a==b:return 0.0
         if frozenset((a,b)) in related:return 0.35
