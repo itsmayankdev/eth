@@ -10,5 +10,8 @@ data/*.db-shm
 data/*.db-wal
 reports/*
 charts/*
+!charts/
+!charts/*.csv
+!charts/*.png
 logs/*
 !.gitkeep
