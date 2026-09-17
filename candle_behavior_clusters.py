@@ -14,6 +14,7 @@ from data.database import MarketDatabase
 
 TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d")
 BLOCKS = 5
+MACRO_GROUPS = 4
 DEFAULT_WINDOW = 20
 DEFAULT_TOP_K = 25
 DEFAULT_CLUSTERS = 8
@@ -82,13 +83,13 @@ def fingerprint_windows(features, window, step):
     close = views[:, :, idx["close_location"]]
     alt = views[:, :, idx["alternation"]]
     pieces = [direction.mean(1), alt.mean(1), body.mean(1), rng.mean(1), upper.mean(1), lower.mean(1), close.mean(1), (body <= .25).mean(1), (body >= .60).mean(1), (rng <= .85).mean(1), (rng >= 1.15).mean(1), (close >= .65).mean(1), (close <= .35).mean(1), (direction > 0).mean(1), (direction < 0).mean(1)]
-    for groups in (3, BLOCKS):
+    for groups in (MACRO_GROUPS, BLOCKS):
         if window % groups:
             raise ValueError(f"window must be divisible by {groups}")
         size = window // groups
         for i in range(groups):
             sl = slice(i * size, (i + 1) * size)
-            if groups == 3:
+            if groups == MACRO_GROUPS:
                 pieces.extend([direction[:, sl].mean(1), body[:, sl].mean(1), rng[:, sl].mean(1), close[:, sl].mean(1), alt[:, sl].mean(1)])
             else:
                 pieces.extend([direction[:, sl].mean(1), body[:, sl].mean(1), rng[:, sl].mean(1), upper[:, sl].mean(1), lower[:, sl].mean(1), close[:, sl].mean(1), alt[:, sl].mean(1)])
@@ -145,11 +146,27 @@ def analyze(db, timeframe, window, top_k, clusters):
     current_cluster = int(center_dist.argmin())
     nearest_hist = ((z[:, None, :] - centers[None, :, :]) ** 2).mean(axis=2).min(axis=1)
     rarity = float(np.mean(nearest_hist <= center_dist[current_cluster]) * 100)
+
     matches = similarity_rank(features, window, top_k)
-    lookup = dict(zip(ends.tolist(), labels.tolist()))
-    matches["cluster"] = matches["candidate_end"].map(lookup).fillna(-1).astype(int)
     names = {i: cluster_name(c) for i, c in enumerate(centers)}
-    matches["cluster_name"] = matches["cluster"].map(names).fillna("NOT_CLUSTERED")
+
+    # Assign every top match to its nearest cluster, rather than only sampled endpoints.
+    match_fps = []
+    match_ends = matches["candidate_end"].to_numpy(int) if not matches.empty else np.array([], dtype=int)
+    values = features[list(FEATURES)].to_numpy(float)
+    for end in match_ends:
+        start = end - window + 1
+        fp, _ = fingerprint_windows(features.iloc[start:end + 1], window, 1)
+        match_fps.append(fp[0])
+    if match_fps:
+        match_z = (np.vstack(match_fps) - med) / scale
+        match_cluster = ((match_z[:, None, :] - centers[None, :, :]) ** 2).mean(axis=2).argmin(axis=1)
+        matches["cluster"] = match_cluster
+        matches["cluster_name"] = [names[int(i)] for i in match_cluster]
+    else:
+        matches["cluster"] = pd.Series(dtype=int)
+        matches["cluster_name"] = pd.Series(dtype=str)
+
     counts = np.bincount(labels, minlength=len(centers))
     summary = pd.DataFrame([{"timeframe": timeframe, "cluster": i, "name": names[i], "historical_windows": int(counts[i]), "share_pct": float(counts[i] / len(labels) * 100), "distance_from_current": float(center_dist[i]), "is_current_cluster": bool(i == current_cluster)} for i in range(len(centers))])
     current = {"timeframe": timeframe, "window": window, "current_cluster": current_cluster, "current_cluster_name": names[current_cluster], "cluster_rarity_percentile": rarity, "historical_windows_clustered": len(matrix), "current_direction_balance": float(current_fp[0]), "current_alternation": float(current_fp[1]), "current_body_level": float(current_fp[2]), "current_range_level": float(current_fp[3]), "current_upper_wick": float(current_fp[4]), "current_lower_wick": float(current_fp[5]), "current_close_location": float(current_fp[6])}
@@ -157,13 +174,14 @@ def analyze(db, timeframe, window, top_k, clusters):
 
 
 def run(all_timeframes, timeframe, window, top_k, clusters):
-    if window % BLOCKS:
-        raise ValueError(f"window must be divisible by {BLOCKS}")
+    if window % BLOCKS or window % MACRO_GROUPS:
+        raise ValueError(f"window must be divisible by both {BLOCKS} and {MACRO_GROUPS}")
     out = Path("charts")
     out.mkdir(exist_ok=True)
     for name in ["candle_behavior_cluster_current.csv", "candle_behavior_cluster_matches.csv", "candle_behavior_cluster_summary.csv", "candle_behavior_cluster_rarity.png"]:
         p = out / name
-        if p.exists(): p.unlink()
+        if p.exists():
+            p.unlink()
     db = MarketDatabase("data/eth_market.db")
     tfs = TIMEFRAMES if all_timeframes else (timeframe,)
     currents, matches_all, summaries = [], [], []
