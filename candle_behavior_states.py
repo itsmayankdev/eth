@@ -1,10 +1,8 @@
 """Descriptive candle-behaviour state research.
 
-This module intentionally does not create trades, targets, stops, signals, or
-outcome predictions. It describes OHLC candle anatomy and sequence transitions
-so historical windows can be compared as behaviour patterns.
+This module intentionally performs no trading, target/stop, signal, or outcome
+analysis. It describes OHLC candle anatomy and sequence transitions.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -16,8 +14,7 @@ import pandas as pd
 
 from candle_similarity import candle_features, rank_candle_sequences
 from config import load_config
-from storage import MarketDatabase
-
+from data.database import MarketDatabase
 
 RANGE_COMPRESSION = 0.75
 RANGE_EXPANSION = 1.25
@@ -27,17 +24,13 @@ REJECTION_WICK = 0.35
 
 
 def classify_candles(raw: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
-    """Return multi-label, human-readable states for every candle."""
     out = raw[["open", "high", "low", "close"]].copy()
     body = features["body_pct"].to_numpy()
     upper = features["upper_wick_pct"].to_numpy()
     lower = features["lower_wick_pct"].to_numpy()
     close_loc = features["close_location"].to_numpy()
-    # candle_similarity stores range/median divided by five; restore the
-    # intuitive range/median ratio here for state thresholds.
     range_ratio = features["range_ratio"].to_numpy() * 5.0
     direction = features["direction"].to_numpy()
-
     states = []
     for i in range(len(out)):
         tags = []
@@ -47,38 +40,31 @@ def classify_candles(raw: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
             tags.append("BEARISH")
         else:
             tags.append("DOJI")
-
         if body[i] < SMALL_BODY:
             tags.append("SMALL_BODY")
         elif body[i] >= LARGE_BODY:
             tags.append("LARGE_BODY")
         else:
             tags.append("MEDIUM_BODY")
-
         if range_ratio[i] < RANGE_COMPRESSION:
             tags.append("COMPRESSION")
         elif range_ratio[i] > RANGE_EXPANSION:
             tags.append("EXPANSION")
         else:
             tags.append("NORMAL_RANGE")
-
         if upper[i] >= REJECTION_WICK:
             tags.append("UPPER_REJECTION")
         if lower[i] >= REJECTION_WICK:
             tags.append("LOWER_REJECTION")
-
         if close_loc[i] >= 0.75:
             tags.append("CLOSE_HIGH")
         elif close_loc[i] <= 0.25:
             tags.append("CLOSE_LOW")
-
         if direction[i] > 0 and body[i] >= LARGE_BODY and close_loc[i] >= 0.70:
             tags.append("STRONG_BULL")
         if direction[i] < 0 and body[i] >= LARGE_BODY and close_loc[i] <= 0.30:
             tags.append("STRONG_BEAR")
-
         states.append("|".join(tags))
-
     out["state"] = states
     out["body_pct"] = features["body_pct"].to_numpy()
     out["range_ratio"] = range_ratio
@@ -89,49 +75,48 @@ def classify_candles(raw: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _summary(window: pd.DataFrame) -> dict:
-    """Summarise behaviour without making an outcome claim."""
+def summarize(window: pd.DataFrame) -> dict:
     n = len(window)
+    if n == 0:
+        return {"transition_profile": "NONE"}
     half = max(1, n // 2)
     first = window.iloc[:half]
     second = window.iloc[-half:]
-
     bullish = float((window["direction"] > 0).mean())
     bearish = float((window["direction"] < 0).mean())
-    flips = float((window["direction"].iloc[1:].to_numpy() * window["direction"].iloc[:-1].to_numpy() < 0).mean()) if n > 1 else 0.0
+    if n > 1:
+        d = window["direction"].to_numpy()
+        alternation = float((d[1:] * d[:-1] < 0).mean())
+    else:
+        alternation = 0.0
     compression = float((window["range_ratio"] < RANGE_COMPRESSION).mean())
     expansion = float((window["range_ratio"] > RANGE_EXPANSION).mean())
     upper_rejection = float((window["upper_wick_pct"] >= REJECTION_WICK).mean())
     lower_rejection = float((window["lower_wick_pct"] >= REJECTION_WICK).mean())
-
     first_bull = float((first["direction"] > 0).mean())
     second_bull = float((second["direction"] > 0).mean())
     directional_shift = second_bull - first_bull
     range_shift = float(second["range_ratio"].mean() - first["range_ratio"].mean())
     body_shift = float(second["body_pct"].mean() - first["body_pct"].mean())
-
-    # These are descriptive labels only. They describe the observed sequence
-    # geometry; they do not predict what happens after the window.
     if first_bull <= 0.35 and second_bull >= 0.65:
-        transition = "BEARISH_TO_BULLISH_SHIFT"
+        profile = "BEARISH_TO_BULLISH_SHIFT"
     elif first_bull >= 0.65 and second_bull <= 0.35:
-        transition = "BULLISH_TO_BEARISH_SHIFT"
+        profile = "BULLISH_TO_BEARISH_SHIFT"
     elif abs(first_bull - 0.5) <= 0.20 and abs(second_bull - 0.5) <= 0.20 and compression >= 0.30:
-        transition = "SIDEWAYS_LIKE"
+        profile = "SIDEWAYS_LIKE"
     elif abs(first_bull - 0.5) <= 0.20 and max(second_bull, 1.0 - second_bull) >= 0.65 and range_shift >= 0.15:
-        transition = "SIDEWAYS_TO_DIRECTIONAL_LIKE"
+        profile = "SIDEWAYS_TO_DIRECTIONAL_LIKE"
     elif range_shift >= 0.20:
-        transition = "RANGE_EXPANSION_LIKE"
+        profile = "RANGE_EXPANSION_LIKE"
     elif range_shift <= -0.20:
-        transition = "RANGE_COMPRESSION_LIKE"
+        profile = "RANGE_COMPRESSION_LIKE"
     else:
-        transition = "MIXED_SEQUENCE"
-
+        profile = "MIXED_SEQUENCE"
     return {
         "candles": n,
         "bullish_fraction": bullish,
         "bearish_fraction": bearish,
-        "alternation_fraction": flips,
+        "alternation_fraction": alternation,
         "compression_fraction": compression,
         "expansion_fraction": expansion,
         "upper_rejection_fraction": upper_rejection,
@@ -143,58 +128,43 @@ def _summary(window: pd.DataFrame) -> dict:
         "directional_shift": directional_shift,
         "range_shift": range_shift,
         "body_shift": body_shift,
-        "transition_profile": transition,
+        "transition_profile": profile,
     }
 
 
-def _print_sequence(name: str, seq: pd.DataFrame, start: int, end: int) -> None:
-    s = _summary(seq)
+def print_sequence(name: str, seq: pd.DataFrame, start: int, end: int) -> None:
+    s = summarize(seq)
     print(f"\n{name}: candles {start} -> {end}")
     print(f"Profile: {s['transition_profile']}")
-    print(
-        "  "
-        f"bull={s['bullish_fraction']:.2f} bear={s['bearish_fraction']:.2f} "
-        f"alternation={s['alternation_fraction']:.2f} "
-        f"compression={s['compression_fraction']:.2f} expansion={s['expansion_fraction']:.2f}"
-    )
-    print(
-        "  "
-        f"upper_rejection={s['upper_rejection_fraction']:.2f} "
-        f"lower_rejection={s['lower_rejection_fraction']:.2f} "
-        f"range_shift={s['range_shift']:+.3f} body_shift={s['body_shift']:+.3f}"
-    )
+    print(f"  bull={s['bullish_fraction']:.2f} bear={s['bearish_fraction']:.2f} alternation={s['alternation_fraction']:.2f} compression={s['compression_fraction']:.2f} expansion={s['expansion_fraction']:.2f}")
+    print(f"  upper_rejection={s['upper_rejection_fraction']:.2f} lower_rejection={s['lower_rejection_fraction']:.2f} range_shift={s['range_shift']:+.3f} body_shift={s['body_shift']:+.3f}")
     print("  States:")
     for idx, row in seq.iterrows():
         print(f"    {idx:>6}: {row['state']}")
 
 
-def _plot_state_matrix(named_windows: list[tuple[str, pd.DataFrame]], path: Path) -> None:
-    """Plot compact categorical state matrix for current + historical windows."""
-    features = [
-        "BULLISH", "BEARISH", "SMALL_BODY", "LARGE_BODY", "COMPRESSION",
-        "EXPANSION", "UPPER_REJECTION", "LOWER_REJECTION", "CLOSE_HIGH", "CLOSE_LOW",
-    ]
-    matrix = np.zeros((len(features), len(named_windows) * len(named_windows[0][1])))
+def plot_state_matrix(named_windows: list[tuple[str, pd.DataFrame]], path: Path) -> None:
+    features = ["BULLISH", "BEARISH", "SMALL_BODY", "LARGE_BODY", "COMPRESSION", "EXPANSION", "UPPER_REJECTION", "LOWER_REJECTION", "CLOSE_HIGH", "CLOSE_LOW"]
+    width = sum(len(frame) for _, frame in named_windows)
+    matrix = np.zeros((len(features), width))
     labels = []
-    for col, (name, frame) in enumerate(named_windows):
-        for j, (_, row) in enumerate(frame.iterrows()):
+    col = 0
+    for name, frame in named_windows:
+        for pos, (_, row) in enumerate(frame.iterrows(), start=1):
             tags = set(row["state"].split("|"))
             for r, feature in enumerate(features):
-                matrix[r, col * len(frame) + j] = feature in tags
-        labels.extend([f"{name}\n{i+1}" for i in range(len(frame))])
-
-    fig_h = max(5.0, len(features) * 0.42)
-    fig_w = max(12.0, len(labels) * 0.18)
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+                matrix[r, col] = feature in tags
+            labels.append(f"{name}\n{pos}")
+            col += 1
+    fig, ax = plt.subplots(figsize=(max(12, width * 0.18), 7))
     ax.imshow(matrix, aspect="auto", interpolation="nearest")
     ax.set_yticks(range(len(features)))
     ax.set_yticklabels(features)
-    ax.set_xticks(range(len(labels)))
+    ax.set_xticks(range(width))
     ax.set_xticklabels(labels, rotation=90, fontsize=6)
-    ax.set_title("Candle Behaviour State Matrix\n(binary presence of descriptive states)")
+    ax.set_title("Candle Behaviour State Matrix")
     ax.set_xlabel("Sequence / candle position")
-    ax.set_ylabel("Behaviour state")
-    ax.grid(False)
+    ax.set_ylabel("Descriptive state")
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -207,106 +177,58 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--context", type=int, default=10)
     args = parser.parse_args()
-
     cfg = load_config("config.yaml")
     db = MarketDatabase(cfg.database)
-    raw = db.load_candles(cfg.symbol, args.timeframe)
-    raw = raw.reset_index(drop=True)
+    try:
+        raw = db.load_candles(cfg.symbol, args.timeframe).reset_index(drop=True)
+    finally:
+        db.close()
     if len(raw) < args.window + 5:
         raise ValueError("Not enough candles for requested window")
-
     features = candle_features(raw)
     states = classify_candles(raw, features)
-
     current_start = len(raw) - args.window
     current = states.iloc[current_start:].copy()
-
-    ranked = rank_candle_sequences(
-        raw,
-        window=args.window,
-        top_k=args.top_k,
-        exclude_recent=args.window,
-    )
+    ranked = rank_candle_sequences(features, current_start=current_start, current_end=len(raw) - 1, candidate_ends=range(args.window - 1, current_start)).head(args.top_k)
 
     print("CANDLE BEHAVIOUR STATE RESEARCH")
     print(f"Symbol: {cfg.symbol} | timeframe: {args.timeframe} | window: {args.window} candles")
     print("Descriptive only: no trades, targets, stops, signals, or outcome predictions.")
-    _print_sequence("CURRENT", current, current_start, len(raw) - 1)
+    print_sequence("CURRENT", current, current_start, len(raw) - 1)
 
     named_windows = [("CURRENT", current)]
-    rows = []
-    seq_rows = []
-    for rank, item in enumerate(ranked[: args.top_k], start=1):
-        start = int(item["candidate_start"])
-        end = int(item["candidate_end"])
-        hist = states.iloc[start : end + 1].copy()
-        named_windows.append((f"HIST_{rank}", hist))
-        _print_sequence(f"HISTORICAL_{rank} | similarity={item['similarity']:.4f}", hist, start, end)
-
-        summary = _summary(hist)
-        rows.append({
-            "rank": rank,
-            "candidate_start": start,
-            "candidate_end": end,
-            "similarity": float(item["similarity"]),
-            **summary,
-        })
-        for pos, (idx, row) in enumerate(hist.iterrows(), start=1):
-            seq_rows.append({
-                "rank": rank,
-                "candidate_start": start,
-                "candidate_end": end,
-                "position": pos,
-                "index": int(idx),
-                "state": row["state"],
-                "body_pct": float(row["body_pct"]),
-                "range_ratio": float(row["range_ratio"]),
-                "upper_wick_pct": float(row["upper_wick_pct"]),
-                "lower_wick_pct": float(row["lower_wick_pct"]),
-                "close_location": float(row["close_location"]),
-            })
-
-    # Context around the matched windows, useful for studying what happened
-    # immediately before/after a similar candle sequence without calling it an outcome.
+    summary_rows = []
+    sequence_rows = []
     context_rows = []
-    context_names = [("CURRENT", current)]
-    for rank, item in enumerate(ranked[: args.top_k], start=1):
+    for rank, item in enumerate(ranked.to_dict("records"), start=1):
         start = int(item["candidate_start"])
         end = int(item["candidate_end"])
-        cstart = max(0, start - args.context)
-        cend = min(len(states), end + args.context + 1)
-        context = states.iloc[cstart:cend].copy()
-        context_names.append((f"HIST_{rank}_CONTEXT", context))
+        hist = states.iloc[start:end + 1].copy()
+        named_windows.append((f"HIST_{rank}", hist))
+        print_sequence(f"HISTORICAL_{rank} | similarity={item['similarity']:.4f}", hist, start, end)
+        s = summarize(hist)
+        summary_rows.append({"rank": rank, "candidate_start": start, "candidate_end": end, "similarity": float(item["similarity"]), **s})
+        for pos, (idx, row) in enumerate(hist.iterrows(), start=1):
+            sequence_rows.append({"rank": rank, "candidate_start": start, "candidate_end": end, "position": pos, "index": int(idx), "state": row["state"], "body_pct": float(row["body_pct"]), "range_ratio": float(row["range_ratio"]), "upper_wick_pct": float(row["upper_wick_pct"]), "lower_wick_pct": float(row["lower_wick_pct"]), "close_location": float(row["close_location"])})
         before = states.iloc[max(0, start - args.context):start]
         after = states.iloc[end + 1:min(len(states), end + 1 + args.context)]
-        context_rows.append({
-            "rank": rank,
-            "similarity": float(item["similarity"]),
-            "before_profile": _summary(before)["transition_profile"] if len(before) else "NONE",
-            "matched_profile": _summary(states.iloc[start:end + 1])["transition_profile"],
-            "after_profile": _summary(after)["transition_profile"] if len(after) else "NONE",
-            "before_bullish": float((before["direction"] > 0).mean()) if len(before) else np.nan,
-            "matched_bullish": float((states.iloc[start:end + 1]["direction"] > 0).mean()),
-            "after_bullish": float((after["direction"] > 0).mean()) if len(after) else np.nan,
-            "before_range": float(before["range_ratio"].mean()) if len(before) else np.nan,
-            "matched_range": float(states.iloc[start:end + 1]["range_ratio"].mean()),
-            "after_range": float(after["range_ratio"].mean()) if len(after) else np.nan,
-        })
+        context_rows.append({"rank": rank, "similarity": float(item["similarity"]), "before_profile": summarize(before).get("transition_profile", "NONE"), "matched_profile": s["transition_profile"], "after_profile": summarize(after).get("transition_profile", "NONE"), "before_bullish": float((before["direction"] > 0).mean()) if len(before) else np.nan, "matched_bullish": float((hist["direction"] > 0).mean()), "after_bullish": float((after["direction"] > 0).mean()) if len(after) else np.nan, "before_range": float(before["range_ratio"].mean()) if len(before) else np.nan, "matched_range": float(hist["range_ratio"].mean()), "after_range": float(after["range_ratio"].mean()) if len(after) else np.nan})
 
     charts = Path("charts")
     charts.mkdir(exist_ok=True)
-    pd.DataFrame(rows).to_csv(charts / "candle_behavior_state_summary.csv", index=False)
-    pd.DataFrame(seq_rows).to_csv(charts / "candle_behavior_state_sequences.csv", index=False)
+    for filename in ["candle_behavior_state_matrix.png", "candle_behavior_state_summary.csv", "candle_behavior_state_sequences.csv", "candle_behavior_state_context.csv"]:
+        old = charts / filename
+        if old.exists():
+            old.unlink()
+    pd.DataFrame(summary_rows).to_csv(charts / "candle_behavior_state_summary.csv", index=False)
+    pd.DataFrame(sequence_rows).to_csv(charts / "candle_behavior_state_sequences.csv", index=False)
     pd.DataFrame(context_rows).to_csv(charts / "candle_behavior_state_context.csv", index=False)
-    _plot_state_matrix(named_windows, charts / "candle_behavior_state_matrix.png")
+    plot_state_matrix(named_windows, charts / "candle_behavior_state_matrix.png")
 
     print("\nTRANSITION PROFILE SUMMARY")
-    print(pd.DataFrame(rows)[["rank", "similarity", "transition_profile", "bullish_fraction", "bearish_fraction", "compression_fraction", "expansion_fraction", "directional_shift", "range_shift"]].to_string(index=False))
-    print("\nSaved:")
-    print("  charts/candle_behavior_state_matrix.png")
-    print("  charts/candle_behavior_state_summary.csv")
-    print("  charts/candle_behavior_state_sequences.csv")
-    print("  charts/candle_behavior_state_context.csv")
+    cols = ["rank", "similarity", "transition_profile", "bullish_fraction", "bearish_fraction", "compression_fraction", "expansion_fraction", "directional_shift", "range_shift"]
+    print(pd.DataFrame(summary_rows)[cols].to_string(index=False))
+    print("\nSaved fresh outputs in charts/")
 
 
 if __name__ == "__main__":
