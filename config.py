@@ -7,6 +7,18 @@ from typing import Any
 import yaml
 
 
+DEFAULT_TIMEFRAME_CANDLES = {
+    "1m": 30_000,
+    "3m": 30_000,
+    "5m": 30_000,
+    "15m": 30_000,
+    "30m": 30_000,
+    "1h": 30_000,
+    "4h": 10_000,
+    "1d": 3_000,
+}
+
+
 @dataclass(frozen=True)
 class PatternConfig:
     lookbacks: list[int] = field(default_factory=lambda: [3, 5, 8, 10, 15, 20, 30, 50])
@@ -43,6 +55,7 @@ class Config:
     symbol: str = "ETHUSDT"
     exchange: str = "binance"
     historical_candles: int = 30_000
+    historical_candles_by_timeframe: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_TIMEFRAME_CANDLES))
     database: str = "data/eth_market.db"
     timeframes: list[str] = field(default_factory=lambda: ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"])
     pattern: PatternConfig = field(default_factory=PatternConfig)
@@ -50,6 +63,9 @@ class Config:
     outcomes: OutcomeConfig = field(default_factory=OutcomeConfig)
     statistics: StatisticsConfig = field(default_factory=StatisticsConfig)
     live: LiveConfig = field(default_factory=LiveConfig)
+
+    def candles_for(self, timeframe: str) -> int:
+        return int(self.historical_candles_by_timeframe.get(timeframe, self.historical_candles))
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -59,11 +75,16 @@ def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
 
 def load_config(path: str | Path = "config.yaml") -> Config:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    candles = raw.get("historical_candles", 30_000)
+    candles = int(raw.get("historical_candles", 30_000))
+    configured_by_tf = raw.get("historical_candles_by_timeframe", DEFAULT_TIMEFRAME_CANDLES)
+    by_tf = dict(DEFAULT_TIMEFRAME_CANDLES)
+    if isinstance(configured_by_tf, dict):
+        by_tf.update({str(k): int(v) for k, v in configured_by_tf.items()})
     return Config(
         symbol=str(raw.get("symbol", "ETHUSDT")),
         exchange=str(raw.get("exchange", "binance")),
-        historical_candles=int(candles),
+        historical_candles=candles,
+        historical_candles_by_timeframe=by_tf,
         database=str(raw.get("database", "data/eth_market.db")),
         timeframes=list(raw.get("timeframes", Config().timeframes)),
         pattern=PatternConfig(**_section(raw, "pattern")),
