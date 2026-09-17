@@ -16,6 +16,7 @@ from features.feature_engine import add_features, pattern_vector
 from structure.representation import build_structure
 from structure.similarity import find_similar_structures
 from analysis.outcomes import OutcomeConfig, evaluate_matches, summarize_outcomes
+from analysis.walk_forward import evaluate_walk_forward
 
 console = Console()
 HISTORICAL_DIR = Path("data/historical")
@@ -143,15 +144,26 @@ def cmd_structure_match(timeframe: str, threshold: float, pivots: int, top_k: in
 
         console.print(f"\n[bold]Latest {timeframe} structure ({threshold:.2f}% ZigZag)[/bold]")
         console.print(" → ".join(current["pivot_type"].astype(str)))
-        console.print(f"Endpoint pivot: {int(current.iloc[-1]['index'])} | Price: {float(current.iloc[-1]['price']):.2f} | Confirmed pivots: {len(structure)}")
+        console.print(
+            f"Endpoint pivot: {int(current.iloc[-1]['index'])} | "
+            f"Confirmed at: {int(current.iloc[-1]['confirmation_index'])} | "
+            f"Price: {float(current.iloc[-1]['price']):.2f} | Confirmed pivots: {len(structure)}"
+        )
 
         if matches.empty:
             console.print(f"No historical matches met similarity >= {minimum_similarity:.2f}.")
             return
-        table = Table("Rank", "Similarity", "End pivot", "Pivot price", "Structure")
+        table = Table("Rank", "Similarity", "End pivot", "Confirmed", "Pivot price", "Structure")
         for rank, match in matches.iterrows():
             pivot = structure.iloc[int(match["candidate_end_position"])]
-            table.add_row(str(rank + 1), f"{float(match['similarity']):.4f}", str(int(match["candidate_end_index"])), f"{float(pivot['price']):.2f}", str(match["pivot_type_sequence"]))
+            table.add_row(
+                str(rank + 1),
+                f"{float(match['similarity']):.4f}",
+                str(int(match["candidate_end_index"])),
+                str(int(match["candidate_confirmation_index"])),
+                f"{float(pivot['price']):.2f}",
+                str(match["pivot_type_sequence"]),
+            )
         console.print(table)
     finally:
         db.close()
@@ -188,11 +200,11 @@ def cmd_structure_outcomes(timeframe: str, threshold: float, pivots: int, top_k:
         summary = summarize_outcomes(outcomes, outcome_cfg.horizons)
 
         console.print(f"\n[bold]Historical outcomes — {timeframe}, {threshold:.2f}% ZigZag, {pivots} pivots[/bold]")
-        console.print(f"Matches: {len(outcomes)} | Target: +{outcome_cfg.target_pct:.2f}% | Stop: -{outcome_cfg.stop_pct:.2f}%")
+        console.print(f"Matches: {len(outcomes)} | Entry: confirmation close | Target: +{outcome_cfg.target_pct:.2f}% | Stop: -{outcome_cfg.stop_pct:.2f}%")
 
-        detail = Table("Rank", "Similarity", "End", *[f"R{h}" for h in outcome_cfg.horizons], *[f"MFE{h}" for h in outcome_cfg.horizons], *[f"MAE{h}" for h in outcome_cfg.horizons])
+        detail = Table("Rank", "Similarity", "Pivot", "Entry", *[f"R{h}" for h in outcome_cfg.horizons], *[f"MFE{h}" for h in outcome_cfg.horizons], *[f"MAE{h}" for h in outcome_cfg.horizons])
         for rank, row in outcomes.iterrows():
-            cells = [str(rank + 1), f"{float(row['similarity']):.4f}", str(int(row['candidate_end_index']))]
+            cells = [str(rank + 1), f"{float(row['similarity']):.4f}", str(int(row['candidate_end_index'])), str(int(row['entry_index']))]
             cells += ["-" if pd.isna(row[f"return_{h}"]) else f"{float(row[f'return_{h}']):+.2f}%" for h in outcome_cfg.horizons]
             cells += ["-" if pd.isna(row[f"mfe_{h}"]) else f"{float(row[f'mfe_{h}']):+.2f}%" for h in outcome_cfg.horizons]
             cells += ["-" if pd.isna(row[f"mae_{h}"]) else f"{float(row[f'mae_{h}']):+.2f}%" for h in outcome_cfg.horizons]
@@ -201,9 +213,74 @@ def cmd_structure_outcomes(timeframe: str, threshold: float, pivots: int, top_k:
 
         summary_table = Table("Horizon", "Samples", "Target", "Stop", "Neither", "Ambiguous", "Target % (all)", "Target % (decisive)")
         for _, row in summary.iterrows():
-            summary_table.add_row(str(int(row["horizon"])), str(int(row["samples"])), str(int(row["target"])), str(int(row["stop"])), str(int(row["neither"])), str(int(row["ambiguous"])), "-" if pd.isna(row["target_rate_all"]) else f"{row['target_rate_all']:.1%}", "-" if pd.isna(row["target_rate_decisive"]) else f"{row['target_rate_decisive']:.1%}")
+            summary_table.add_row(
+                str(int(row["horizon"])), str(int(row["samples"])), str(int(row["target"])),
+                str(int(row["stop"])), str(int(row["neither"])), str(int(row["ambiguous"])),
+                "-" if pd.isna(row["target_rate_all"]) else f"{row['target_rate_all']:.1%}",
+                "-" if pd.isna(row["target_rate_decisive"]) else f"{row['target_rate_decisive']:.1%}",
+            )
         console.print("\n[bold]Target / stop summary[/bold]")
         console.print(summary_table)
+    finally:
+        db.close()
+
+
+def cmd_walk_forward(timeframe: str, threshold: float, pivots: int, top_k: int, minimum_similarity: float, max_samples: int, spacing_candles: int | None) -> None:
+    """Evaluate many historical endpoints using only information available then."""
+    cfg = load_config()
+    if timeframe not in cfg.timeframes:
+        raise ValueError(f"unsupported timeframe: {timeframe}")
+    if threshold <= 0 or pivots <= 0 or top_k <= 0 or max_samples <= 0:
+        raise ValueError("threshold, pivots, top_k and max_samples must be greater than 0")
+
+    db = MarketDatabase(cfg.database)
+    try:
+        candles = db.load_candles(cfg.symbol, timeframe)
+        if candles.empty:
+            console.print("[yellow]No candle data available.[/yellow]")
+            return
+        structure = build_structure(candles, threshold)
+        outcome_cfg = OutcomeConfig(
+            horizons=tuple(cfg.outcomes.horizons),
+            target_pct=cfg.outcomes.target_pct,
+            stop_pct=cfg.outcomes.stop_pct,
+        )
+        outcomes, summary = evaluate_walk_forward(
+            structure,
+            candles,
+            n_pivots=pivots,
+            top_k=top_k,
+            minimum_similarity=minimum_similarity,
+            outcome_config=outcome_cfg,
+            max_samples=max_samples,
+            spacing_candles=spacing_candles,
+        )
+        if outcomes.empty:
+            console.print("No evaluable historical matches found.")
+            return
+
+        endpoint_count = outcomes[["evaluation_endpoint_position"]].drop_duplicates().shape[0]
+        console.print(f"\n[bold]Walk-forward evaluation — {timeframe}, {threshold:.2f}% ZigZag, {pivots} pivots[/bold]")
+        console.print(
+            f"Evaluation endpoints: {endpoint_count} | Match outcomes: {len(outcomes)} | "
+            f"Top-K: {top_k} | Min similarity: {minimum_similarity:.2f} | "
+            f"Entry: match confirmation close"
+        )
+
+        table = Table(
+            "Horizon", "Samples", "Target", "Stop", "Neither", "Ambiguous",
+            "Target %", "Wilson 95%", "Decisive %", "Wilson 95% (decisive)"
+        )
+        for _, row in summary.iterrows():
+            all_ci = f"{row['target_rate_all_lower']:.1%}–{row['target_rate_all_upper']:.1%}"
+            dec_ci = f"{row['target_rate_decisive_lower']:.1%}–{row['target_rate_decisive_upper']:.1%}"
+            table.add_row(
+                str(int(row["horizon"])), str(int(row["samples"])), str(int(row["target"])),
+                str(int(row["stop"])), str(int(row["neither"])), str(int(row["ambiguous"])),
+                f"{row['target_rate_all']:.1%}", all_ci,
+                f"{row['target_rate_decisive']:.1%}", dec_ci,
+            )
+        console.print(table)
     finally:
         db.close()
 
@@ -228,6 +305,14 @@ def main() -> None:
     p_outcome.add_argument("--pivots", type=int, default=8)
     p_outcome.add_argument("--top-k", type=int, default=10)
     p_outcome.add_argument("--minimum-similarity", type=float, default=None)
+    p_walk = sub.add_parser("walk-forward", help="Evaluate many historical endpoints with Wilson intervals")
+    p_walk.add_argument("--timeframe", default="1h")
+    p_walk.add_argument("--threshold", type=float, default=1.0)
+    p_walk.add_argument("--pivots", type=int, default=8)
+    p_walk.add_argument("--top-k", type=int, default=10)
+    p_walk.add_argument("--minimum-similarity", type=float, default=None)
+    p_walk.add_argument("--max-samples", type=int, default=250)
+    p_walk.add_argument("--spacing-candles", type=int, default=None)
     sub.add_parser("export-data")
     sub.add_parser("restore-data")
     args = parser.parse_args()
@@ -238,6 +323,7 @@ def main() -> None:
     elif args.command == "scan": cmd_scan()
     elif args.command == "structure-match": cmd_structure_match(args.timeframe, args.threshold, args.pivots, args.top_k, cfg.pattern.minimum_similarity if args.minimum_similarity is None else args.minimum_similarity)
     elif args.command == "structure-outcomes": cmd_structure_outcomes(args.timeframe, args.threshold, args.pivots, args.top_k, cfg.pattern.minimum_similarity if args.minimum_similarity is None else args.minimum_similarity)
+    elif args.command == "walk-forward": cmd_walk_forward(args.timeframe, args.threshold, args.pivots, args.top_k, cfg.pattern.minimum_similarity if args.minimum_similarity is None else args.minimum_similarity, args.max_samples, args.spacing_candles)
     elif args.command == "export-data": cmd_export_data()
     elif args.command == "restore-data": cmd_restore_data()
 
