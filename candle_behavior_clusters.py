@@ -127,7 +127,7 @@ def cluster_name(center):
 
 
 def analyze(db, timeframe, window, top_k, clusters):
-    df = db.load_candles(timeframe)
+    df = db.load_candles("ETHUSDT", timeframe)
     if df.empty or len(df) < window * 2:
         return None
     features = candle_features(df)
