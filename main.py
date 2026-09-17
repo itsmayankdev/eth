@@ -16,7 +16,13 @@ from features.feature_engine import add_features, pattern_vector
 from structure.representation import build_structure
 from structure.similarity import find_similar_structures
 from analysis.outcomes import OutcomeConfig, evaluate_matches, summarize_outcomes
-from analysis.walk_forward import evaluate_walk_forward
+from analysis.walk_forward import (
+    deoverlap_outcomes,
+    evaluate_endpoint_baseline,
+    evaluate_walk_forward,
+    summarize_outcomes_with_ci,
+    summarize_similarity_buckets,
+)
 
 console = Console()
 HISTORICAL_DIR = Path("data/historical")
@@ -42,7 +48,6 @@ def cmd_download(candles: int | None) -> None:
     override = candles
     if override is not None and override <= 0:
         raise ValueError("candles must be greater than 0")
-
     table = Table("Timeframe", "Target candles", "Rows added", "Last candle")
     for tf in cfg.timeframes:
         target = override if override is not None else cfg.candles_for(tf)
@@ -127,7 +132,6 @@ def cmd_structure_match(timeframe: str, threshold: float, pivots: int, top_k: in
         raise ValueError(f"unsupported timeframe: {timeframe}")
     if threshold <= 0 or pivots <= 0 or top_k <= 0:
         raise ValueError("threshold, pivots and top_k must be greater than 0")
-
     db = MarketDatabase(cfg.database)
     try:
         candles = db.load_candles(cfg.symbol, timeframe)
@@ -138,10 +142,8 @@ def cmd_structure_match(timeframe: str, threshold: float, pivots: int, top_k: in
         if len(structure) < pivots * 2:
             console.print(f"[yellow]Not enough confirmed pivots: {len(structure)} available, need at least {pivots * 2}.[/yellow]")
             return
-
         current = structure.tail(pivots)
         matches = find_similar_structures(structure, n_pivots=pivots, top_k=top_k, minimum_similarity=minimum_similarity)
-
         console.print(f"\n[bold]Latest {timeframe} structure ({threshold:.2f}% ZigZag)[/bold]")
         console.print(" → ".join(current["pivot_type"].astype(str)))
         console.print(
@@ -149,7 +151,6 @@ def cmd_structure_match(timeframe: str, threshold: float, pivots: int, top_k: in
             f"Confirmed at: {int(current.iloc[-1]['confirmation_index'])} | "
             f"Price: {float(current.iloc[-1]['price']):.2f} | Confirmed pivots: {len(structure)}"
         )
-
         if matches.empty:
             console.print(f"No historical matches met similarity >= {minimum_similarity:.2f}.")
             return
@@ -157,12 +158,9 @@ def cmd_structure_match(timeframe: str, threshold: float, pivots: int, top_k: in
         for rank, match in matches.iterrows():
             pivot = structure.iloc[int(match["candidate_end_position"])]
             table.add_row(
-                str(rank + 1),
-                f"{float(match['similarity']):.4f}",
-                str(int(match["candidate_end_index"])),
-                str(int(match["candidate_confirmation_index"])),
-                f"{float(pivot['price']):.2f}",
-                str(match["pivot_type_sequence"]),
+                str(rank + 1), f"{float(match['similarity']):.4f}",
+                str(int(match["candidate_end_index"])), str(int(match["candidate_confirmation_index"])),
+                f"{float(pivot['price']):.2f}", str(match["pivot_type_sequence"]),
             )
         console.print(table)
     finally:
@@ -181,27 +179,17 @@ def cmd_structure_outcomes(timeframe: str, threshold: float, pivots: int, top_k:
         if len(structure) < pivots * 2:
             console.print(f"[yellow]Not enough confirmed pivots: {len(structure)}.[/yellow]")
             return
-        matches = find_similar_structures(
-            structure,
-            n_pivots=pivots,
-            top_k=top_k,
-            minimum_similarity=minimum_similarity,
-        )
+        matches = find_similar_structures(structure, n_pivots=pivots, top_k=top_k, minimum_similarity=minimum_similarity)
         if matches.empty:
             console.print("No historical matches found.")
             return
-
         outcome_cfg = OutcomeConfig(
-            horizons=tuple(cfg.outcomes.horizons),
-            target_pct=cfg.outcomes.target_pct,
-            stop_pct=cfg.outcomes.stop_pct,
+            horizons=tuple(cfg.outcomes.horizons), target_pct=cfg.outcomes.target_pct, stop_pct=cfg.outcomes.stop_pct,
         )
         outcomes = evaluate_matches(matches, candles, structure, outcome_cfg)
         summary = summarize_outcomes(outcomes, outcome_cfg.horizons)
-
         console.print(f"\n[bold]Historical outcomes — {timeframe}, {threshold:.2f}% ZigZag, {pivots} pivots[/bold]")
         console.print(f"Matches: {len(outcomes)} | Entry: confirmation close | Target: +{outcome_cfg.target_pct:.2f}% | Stop: -{outcome_cfg.stop_pct:.2f}%")
-
         detail = Table("Rank", "Similarity", "Pivot", "Entry", *[f"R{h}" for h in outcome_cfg.horizons], *[f"MFE{h}" for h in outcome_cfg.horizons], *[f"MAE{h}" for h in outcome_cfg.horizons])
         for rank, row in outcomes.iterrows():
             cells = [str(rank + 1), f"{float(row['similarity']):.4f}", str(int(row['candidate_end_index'])), str(int(row['entry_index']))]
@@ -210,12 +198,11 @@ def cmd_structure_outcomes(timeframe: str, threshold: float, pivots: int, top_k:
             cells += ["-" if pd.isna(row[f"mae_{h}"]) else f"{float(row[f'mae_{h}']):+.2f}%" for h in outcome_cfg.horizons]
             detail.add_row(*cells)
         console.print(detail)
-
         summary_table = Table("Horizon", "Samples", "Target", "Stop", "Neither", "Ambiguous", "Target % (all)", "Target % (decisive)")
         for _, row in summary.iterrows():
             summary_table.add_row(
-                str(int(row["horizon"])), str(int(row["samples"])), str(int(row["target"])),
-                str(int(row["stop"])), str(int(row["neither"])), str(int(row["ambiguous"])),
+                str(int(row["horizon"])), str(int(row["samples"])), str(int(row["target"])), str(int(row["stop"])),
+                str(int(row["neither"])), str(int(row["ambiguous"])),
                 "-" if pd.isna(row["target_rate_all"]) else f"{row['target_rate_all']:.1%}",
                 "-" if pd.isna(row["target_rate_decisive"]) else f"{row['target_rate_decisive']:.1%}",
             )
@@ -225,14 +212,28 @@ def cmd_structure_outcomes(timeframe: str, threshold: float, pivots: int, top_k:
         db.close()
 
 
+def _print_summary(title: str, summary: pd.DataFrame) -> None:
+    console.print(f"\n[bold]{title}[/bold]")
+    table = Table("Horizon", "Samples", "Target", "Stop", "Neither", "Ambiguous", "Target %", "Wilson 95%", "Decisive %", "Wilson 95% (decisive)")
+    for _, row in summary.iterrows():
+        table.add_row(
+            str(int(row["horizon"])), str(int(row["samples"])), str(int(row["target"])), str(int(row["stop"])),
+            str(int(row["neither"])), str(int(row["ambiguous"])),
+            f"{row['target_rate_all']:.1%}",
+            f"{row['target_rate_all_lower']:.1%}–{row['target_rate_all_upper']:.1%}",
+            f"{row['target_rate_decisive']:.1%}",
+            f"{row['target_rate_decisive_lower']:.1%}–{row['target_rate_decisive_upper']:.1%}",
+        )
+    console.print(table)
+
+
 def cmd_walk_forward(timeframe: str, threshold: float, pivots: int, top_k: int, minimum_similarity: float, max_samples: int, spacing_candles: int | None) -> None:
-    """Evaluate many historical endpoints using only information available then."""
+    """Run causal matching plus baseline, de-overlap and similarity-bucket controls."""
     cfg = load_config()
     if timeframe not in cfg.timeframes:
         raise ValueError(f"unsupported timeframe: {timeframe}")
     if threshold <= 0 or pivots <= 0 or top_k <= 0 or max_samples <= 0:
         raise ValueError("threshold, pivots, top_k and max_samples must be greater than 0")
-
     db = MarketDatabase(cfg.database)
     try:
         candles = db.load_candles(cfg.symbol, timeframe)
@@ -241,46 +242,61 @@ def cmd_walk_forward(timeframe: str, threshold: float, pivots: int, top_k: int, 
             return
         structure = build_structure(candles, threshold)
         outcome_cfg = OutcomeConfig(
-            horizons=tuple(cfg.outcomes.horizons),
-            target_pct=cfg.outcomes.target_pct,
-            stop_pct=cfg.outcomes.stop_pct,
+            horizons=tuple(cfg.outcomes.horizons), target_pct=cfg.outcomes.target_pct, stop_pct=cfg.outcomes.stop_pct,
         )
         outcomes, summary = evaluate_walk_forward(
-            structure,
-            candles,
-            n_pivots=pivots,
-            top_k=top_k,
-            minimum_similarity=minimum_similarity,
-            outcome_config=outcome_cfg,
-            max_samples=max_samples,
-            spacing_candles=spacing_candles,
+            structure, candles, n_pivots=pivots, top_k=top_k,
+            minimum_similarity=minimum_similarity, outcome_config=outcome_cfg,
+            max_samples=max_samples, spacing_candles=spacing_candles,
         )
         if outcomes.empty:
             console.print("No evaluable historical matches found.")
             return
 
-        endpoint_count = outcomes[["evaluation_endpoint_position"]].drop_duplicates().shape[0]
+        endpoint_positions = sorted({int(x) for x in outcomes["evaluation_endpoint_position"].dropna()})
+        baseline = evaluate_endpoint_baseline(structure, candles, endpoint_positions, outcome_cfg)
+        max_horizon = max(outcome_cfg.horizons)
+        deoverlapped = deoverlap_outcomes(outcomes, max_horizon)
+        de_summary = summarize_outcomes_with_ci(deoverlapped, outcome_cfg.horizons)
+        bucket_summary = summarize_similarity_buckets(outcomes, outcome_cfg.horizons)
+        bucket_de_summary = summarize_similarity_buckets(deoverlapped, outcome_cfg.horizons)
+        baseline_summary = summarize_outcomes_with_ci(baseline, outcome_cfg.horizons)
+
+        endpoint_count = len(endpoint_positions)
         console.print(f"\n[bold]Walk-forward evaluation — {timeframe}, {threshold:.2f}% ZigZag, {pivots} pivots[/bold]")
         console.print(
             f"Evaluation endpoints: {endpoint_count} | Match outcomes: {len(outcomes)} | "
-            f"Top-K: {top_k} | Min similarity: {minimum_similarity:.2f} | "
-            f"Entry: match confirmation close"
+            f"De-overlapped matches: {len(deoverlapped)} | Top-K: {top_k} | "
+            f"Min similarity: {minimum_similarity:.2f} | Entry: match confirmation close"
         )
+        _print_summary("Matched outcomes — raw", summary)
+        _print_summary("Baseline — actual evaluation endpoints (no matching)", baseline_summary)
+        _print_summary("Matched outcomes — de-overlapped", de_summary)
 
-        table = Table(
-            "Horizon", "Samples", "Target", "Stop", "Neither", "Ambiguous",
-            "Target %", "Wilson 95%", "Decisive %", "Wilson 95% (decisive)"
-        )
-        for _, row in summary.iterrows():
-            all_ci = f"{row['target_rate_all_lower']:.1%}–{row['target_rate_all_upper']:.1%}"
-            dec_ci = f"{row['target_rate_decisive_lower']:.1%}–{row['target_rate_decisive_upper']:.1%}"
-            table.add_row(
-                str(int(row["horizon"])), str(int(row["samples"])), str(int(row["target"])),
-                str(int(row["stop"])), str(int(row["neither"])), str(int(row["ambiguous"])),
-                f"{row['target_rate_all']:.1%}", all_ci,
-                f"{row['target_rate_decisive']:.1%}", dec_ci,
-            )
-        console.print(table)
+        if not bucket_summary.empty:
+            console.print("\n[bold]Similarity buckets — raw matches[/bold]")
+            table = Table("Similarity", "Horizon", "Samples", "Target %", "Wilson 95%", "Decisive %", "Wilson 95% (decisive)")
+            for _, row in bucket_summary.iterrows():
+                table.add_row(
+                    str(row["similarity_bucket"]), str(int(row["horizon"])), str(int(row["samples"])),
+                    f"{row['target_rate_all']:.1%}",
+                    f"{row['target_rate_all_lower']:.1%}–{row['target_rate_all_upper']:.1%}",
+                    f"{row['target_rate_decisive']:.1%}",
+                    f"{row['target_rate_decisive_lower']:.1%}–{row['target_rate_decisive_upper']:.1%}",
+                )
+            console.print(table)
+        if not bucket_de_summary.empty:
+            console.print("\n[bold]Similarity buckets — de-overlapped matches[/bold]")
+            table = Table("Similarity", "Horizon", "Samples", "Target %", "Wilson 95%", "Decisive %", "Wilson 95% (decisive)")
+            for _, row in bucket_de_summary.iterrows():
+                table.add_row(
+                    str(row["similarity_bucket"]), str(int(row["horizon"])), str(int(row["samples"])),
+                    f"{row['target_rate_all']:.1%}",
+                    f"{row['target_rate_all_lower']:.1%}–{row['target_rate_all_upper']:.1%}",
+                    f"{row['target_rate_decisive']:.1%}",
+                    f"{row['target_rate_decisive_lower']:.1%}–{row['target_rate_decisive_upper']:.1%}",
+                )
+            console.print(table)
     finally:
         db.close()
 
@@ -305,7 +321,7 @@ def main() -> None:
     p_outcome.add_argument("--pivots", type=int, default=8)
     p_outcome.add_argument("--top-k", type=int, default=10)
     p_outcome.add_argument("--minimum-similarity", type=float, default=None)
-    p_walk = sub.add_parser("walk-forward", help="Evaluate many historical endpoints with Wilson intervals")
+    p_walk = sub.add_parser("walk-forward", help="Evaluate endpoints with baseline, overlap and similarity controls")
     p_walk.add_argument("--timeframe", default="1h")
     p_walk.add_argument("--threshold", type=float, default=1.0)
     p_walk.add_argument("--pivots", type=int, default=8)
