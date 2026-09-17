@@ -115,19 +115,20 @@ def structure_similarity(
     )
 
 
-def find_similar_structures(
+def find_similar_structures_at(
     structure: pd.DataFrame,
+    current_end_position: int,
     n_pivots: int = 8,
     top_k: int = 10,
     minimum_similarity: float = 0.0,
     config: SimilarityConfig | None = None,
     max_endpoint_index: int | None = None,
 ) -> pd.DataFrame:
-    """Find historical matches that were confirmed before the current structure.
+    """Find matches for a structure known at a specific historical endpoint.
 
-    The current structure is the final ``n_pivots`` rows. A candidate is eligible
-    only when its own final pivot was already confirmed before the current final
-    pivot became available. This keeps retrieval causal for walk-forward use.
+    Both the current sequence and candidate sequences are composed only of
+    pivots whose confirmation happened before the current endpoint. The
+    candidate endpoint is strictly earlier than the current endpoint.
     """
     columns = [
         "candidate_start_index",
@@ -138,18 +139,26 @@ def find_similar_structures(
         "similarity",
         "pivot_type_sequence",
     ]
-    if structure.empty or n_pivots <= 0 or top_k <= 0 or len(structure) < (2 * n_pivots):
+    if (
+        structure.empty
+        or current_end_position < 0
+        or current_end_position >= len(structure)
+        or n_pivots <= 0
+        or top_k <= 0
+    ):
         return pd.DataFrame(columns=columns)
 
     data = structure.reset_index(drop=True)
-    current = data.tail(n_pivots).copy()
+    if current_end_position + 1 < 2 * n_pivots:
+        return pd.DataFrame(columns=columns)
+
+    current = data.iloc[current_end_position - n_pivots + 1 : current_end_position + 1].copy()
     current_confirmation = int(current.iloc[-1]["confirmation_index"])
     cutoff = current_confirmation if max_endpoint_index is None else min(current_confirmation, int(max_endpoint_index))
 
     matches: list[dict] = []
-    for end_pos in range(n_pivots - 1, len(data) - n_pivots):
+    for end_pos in range(n_pivots - 1, current_end_position - n_pivots + 1):
         candidate = data.iloc[end_pos - n_pivots + 1 : end_pos + 1].copy()
-        candidate_end = int(candidate.iloc[-1]["index"])
         candidate_confirmation = int(candidate.iloc[-1]["confirmation_index"])
         if candidate_confirmation >= cutoff:
             continue
@@ -160,7 +169,7 @@ def find_similar_structures(
         matches.append(
             {
                 "candidate_start_index": int(candidate.iloc[0]["index"]),
-                "candidate_end_index": candidate_end,
+                "candidate_end_index": int(candidate.iloc[-1]["index"]),
                 "candidate_start_position": int(end_pos - n_pivots + 1),
                 "candidate_end_position": int(end_pos),
                 "candidate_confirmation_index": candidate_confirmation,
@@ -177,4 +186,36 @@ def find_similar_structures(
         result.sort_values(["similarity", "candidate_end_index"], ascending=[False, False])
         .head(top_k)
         .reset_index(drop=True)
+    )
+
+
+def find_similar_structures(
+    structure: pd.DataFrame,
+    n_pivots: int = 8,
+    top_k: int = 10,
+    minimum_similarity: float = 0.0,
+    config: SimilarityConfig | None = None,
+    max_endpoint_index: int | None = None,
+) -> pd.DataFrame:
+    """Find historical matches for the latest confirmed structure."""
+    if structure.empty:
+        return pd.DataFrame(
+            columns=[
+                "candidate_start_index",
+                "candidate_end_index",
+                "candidate_start_position",
+                "candidate_end_position",
+                "candidate_confirmation_index",
+                "similarity",
+                "pivot_type_sequence",
+            ]
+        )
+    return find_similar_structures_at(
+        structure,
+        current_end_position=len(structure) - 1,
+        n_pivots=n_pivots,
+        top_k=top_k,
+        minimum_similarity=minimum_similarity,
+        config=config,
+        max_endpoint_index=max_endpoint_index,
     )
