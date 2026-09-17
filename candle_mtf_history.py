@@ -58,9 +58,17 @@ def feature_vector(features: pd.DataFrame, start: int, window: int) -> np.ndarra
     ], dtype=float)
 
 
-def build_history(features: pd.DataFrame, window: int, step: int):
+def build_history(features: pd.DataFrame, window: int):
+    """Build every valid historical window.
+
+    We deliberately keep all window endpoints here. The caller may sample
+    anchor candidates with `step`, but cross-timeframe alignment must be able
+    to select the window ending at the same historical time in each timeframe.
+    Sampling the stored windows themselves would create artificial alignment
+    gaps (for example, 1d windows every 20 days versus 1h windows every 20h).
+    """
     n = len(features)
-    starts = np.arange(0, n - window + 1, step, dtype=int)
+    starts = np.arange(0, n - window + 1, dtype=int)
     matrix = np.vstack([feature_vector(features, int(s), window) for s in starts])
     return matrix, starts
 
@@ -99,6 +107,9 @@ def aligned_index(times: np.ndarray, target: int, timeframe: str) -> int | None:
 def run(window: int, top_k: int, step: int, output_dir: str):
     if window < 4 or window % 2:
         raise ValueError("window must be an even number >= 4")
+    if step < 1:
+        raise ValueError("step must be >= 1")
+
     out = Path(output_dir)
     out.mkdir(exist_ok=True)
 
@@ -111,7 +122,7 @@ def run(window: int, top_k: int, step: int, output_dir: str):
             continue
         df = df.sort_values("open_time").reset_index(drop=True)
         feats = candle_features(df)
-        matrix, starts = build_history(feats, window, step)
+        matrix, starts = build_history(feats, window)
         current = feature_vector(feats, len(feats) - window, window)
         sims = similarity(current, matrix)
         ends = starts + window - 1
@@ -125,7 +136,7 @@ def run(window: int, top_k: int, step: int, output_dir: str):
             "current": current,
             "similarity": sims,
         }
-        print(f"[{tf}] {len(matrix)} historical windows prepared")
+        print(f"[{tf}] {len(matrix)} full historical windows prepared")
 
     if ANCHOR_TF not in data:
         raise RuntimeError("1h data is required as the historical alignment anchor")
@@ -149,10 +160,6 @@ def run(window: int, top_k: int, step: int, output_dir: str):
         })
     current_df = pd.DataFrame(current_rows)
 
-    # Find the time period that exists in EVERY timeframe's historical windows.
-    # This is critical because the snapshots have different history lengths:
-    # 1m is much shorter than 1d. Candidate anchors outside this overlap cannot
-    # possibly produce a true all-timeframe historical comparison.
     common_start = max(int(item["times"][0]) for item in data.values())
     common_end = min(int(item["times"][-1]) for item in data.values())
 
@@ -168,6 +175,7 @@ def run(window: int, top_k: int, step: int, output_dir: str):
         (anchor["times"] >= common_start)
         & (anchor["times"] <= common_end)
         & (anchor["starts"] != current_anchor_start)
+        & ((anchor["starts"] % step) == 0)
     )
     candidate_indices = np.flatnonzero(overlap_mask)
 
@@ -177,7 +185,6 @@ def run(window: int, top_k: int, step: int, output_dir: str):
     if len(candidate_indices) == 0:
         raise RuntimeError("No synchronized historical windows in the common timeframe overlap")
 
-    # Rank ONLY candidates inside the common overlap.
     ranked = candidate_indices[np.argsort(anchor["similarity"][candidate_indices])[::-1]]
 
     results = []
