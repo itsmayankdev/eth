@@ -101,18 +101,21 @@ function esc(x){return String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt
 function phases(s){return esc(s).split(' -&gt; ').map(x=>'<span class="phase">'+x+'</span>').join(' → ')}
 function table(rows,cols){if(!rows.length)return '<div class="card muted">No data available.</div>';return '<div style="overflow:auto"><table><thead><tr>'+cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(r[c])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>'}
 async function load(){
-try{
-const [cur,mtf,matches,levels,trans]=await Promise.all([
-csv('candle_story_current.csv'),csv('candle_story_mtf_history_current_1h.csv'),csv('candle_story_mtf_history_matches_1h.csv'),csv('price_level_current.csv'),csv('candle_transition_current.csv')
-]);
-document.getElementById('currentCards').innerHTML=cur.map(r=>'<div class="card tf"><h3>'+esc(r.timeframe)+' <span class="badge">20 candles</span></h3><div class="story">'+phases(r.story)+'</div><p class="muted">Interactions: '+esc(r.interaction_count)+' · Rejections: '+esc(r.rejection_count)+' · Pullbacks: '+esc(r.pullback_count)+' · Repeated tests: '+esc(r.repeated_level_tests)+' · Expansions after interaction: '+esc(r.reaction_expansion_count)+'</p></div>').join('');
+const files=[
+['cur','candle_story_current.csv'],['mtf','candle_story_mtf_history_current_1h.csv'],['matches','candle_story_mtf_history_matches_1h.csv'],['levels','price_level_current.csv'],['trans','candle_transition_current.csv']
+];
+const settled=await Promise.all(files.map(async ([key,file])=>{try{return [key,await csv(file),null]}catch(e){return [key,[],file]}}));
+const d=Object.fromEntries(settled.map(x=>[x[0],x[1]]));
+const missing=settled.filter(x=>x[2]).map(x=>x[2]);
+if(missing.length){document.querySelector('main').insertAdjacentHTML('afterbegin','<div class="note">Dashboard loaded. Some optional research files are not currently published: '+missing.map(esc).join(', ')+'. The available sections still work.</div>')}
+const cur=d.cur,mtf=d.mtf,matches=d.matches,levels=d.levels,trans=d.trans;
+document.getElementById('currentCards').innerHTML=cur.length?cur.map(r=>'<div class="card tf"><h3>'+esc(r.timeframe)+' <span class="badge">20 candles</span></h3><div class="story">'+phases(r.story)+'</div><p class="muted">Interactions: '+esc(r.interaction_count)+' · Rejections: '+esc(r.rejection_count)+' · Pullbacks: '+esc(r.pullback_count)+' · Repeated tests: '+esc(r.repeated_level_tests)+' · Expansions after interaction: '+esc(r.reaction_expansion_count)+'</p></div>').join(''):'<div class="card muted">Current story data unavailable.</div>';
 document.getElementById('mtfCurrent').innerHTML=table(mtf,['timeframe','role','current_family_story','research_note']);
 document.getElementById('storyTable').innerHTML=table(cur,['timeframe','story','story_event_count','story_phase_count']);
 document.getElementById('matchTable').innerHTML=table(matches.slice(0,25),['rank','reference_timestamp','combined_similarity','cross_tf_candle_similarity','cross_tf_story_similarity']);
 document.getElementById('historyTable').innerHTML=table(matches.slice(0,25),['rank','reference_timestamp','combined_similarity','cross_tf_candle_similarity','cross_tf_story_similarity','alignment_status']);
 document.getElementById('levelTable').innerHTML=table(levels,['timeframe','level_count','interaction_count','hold_count','rejection_count','pullback_count','repeated_level_tests','reaction_expansion_count','story']);
-document.getElementById('transitionTable').innerHTML=table(trans,['timeframe','transition_type','first_direction','second_direction','direction_shift','range_shift']);
-}catch(e){document.querySelector('main').insertAdjacentHTML('afterbegin','<div class="error">Some research files could not be loaded: '+esc(e.message)+'</div>')}
+document.getElementById('transitionTable').innerHTML=trans.length?table(trans,['timeframe','transition_type','first_direction','second_direction','direction_shift','range_shift']):'<div class="card muted">The transition CSV is not currently published in GitHub, so this section is waiting for that research output.</div>';
 }
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById(b.dataset.page).classList.add('active')});
 load();
