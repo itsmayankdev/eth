@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ETH Candle Research Dashboard</title>
+<style>
+:root{--bg:#f5f7fb;--card:#fff;--text:#172033;--muted:#667085;--line:#e6eaf0;--accent:#2563eb;--soft:#eef4ff;--green:#16845b;--amber:#b76e00}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--text)}
+header{background:#111827;color:#fff;padding:26px 28px}header .wrap,.wrap{max-width:1400px;margin:auto}
+h1{margin:0;font-size:28px}header p{margin:7px 0 0;color:#cbd5e1}
+nav{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+nav .wrap{display:flex;gap:8px;overflow:auto;padding:10px 14px}
+button{border:0;background:transparent;padding:10px 14px;border-radius:9px;font-weight:600;color:var(--muted);cursor:pointer}
+button.active,button:hover{background:var(--soft);color:var(--accent)}
+main{padding:24px 16px 60px}.page{display:none}.page.active{display:block}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:0 2px 8px rgba(16,24,40,.03)}
+.kpi{font-size:28px;font-weight:750;margin-top:6px}.label{font-size:13px;color:var(--muted)}h2{font-size:20px;margin:28px 0 13px}h3{margin:0 0 8px;font-size:16px}
+.tf{border-left:4px solid var(--accent)}.tf .story{font-size:13px;line-height:1.65;color:#344054}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:var(--soft);color:var(--accent);font-size:12px;font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:13px;background:#fff;border-radius:12px;overflow:hidden}
+th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);vertical-align:top}th{background:#f8fafc;color:#475467;position:sticky;top:53px}
+.muted{color:var(--muted)}.note{background:#fff9e8;border:1px solid #f2dfad;border-radius:12px;padding:14px;color:#664d03;font-size:13px}
+img.chart{width:100%;border:1px solid var(--line);border-radius:12px;background:#fff}
+.storyline{line-height:1.9}.phase{display:inline-block;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:7px;padding:4px 7px;margin:3px;font-size:12px}
+.search{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;margin-bottom:12px}
+.error{color:#b42318;background:#fff1f0;padding:12px;border-radius:10px}
+@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
+@media(max-width:600px){.grid{grid-template-columns:1fr}header{padding:20px 16px}}
+</style>
+</head>
+<body>
+<header><div class="wrap"><h1>ETH Candle Behaviour Research</h1><p>One simple view of the ETH/USDT candle, story, level and multi-timeframe research.</p></div></header>
+<nav><div class="wrap">
+<button class="tab active" data-page="overview">Overview</button>
+<button class="tab" data-page="current">Current</button>
+<button class="tab" data-page="stories">Stories</button>
+<button class="tab" data-page="history">History</button>
+<button class="tab" data-page="levels">Levels</button>
+<button class="tab" data-page="transitions">Transitions</button>
+</div></nav>
+<main class="wrap">
+<section id="overview" class="page active">
+<div class="grid">
+<div class="card"><div class="label">Asset</div><div class="kpi">ETH/USDT</div></div>
+<div class="card"><div class="label">Timeframes</div><div class="kpi">8</div><div class="muted">1m → 1d</div></div>
+<div class="card"><div class="label">Current window</div><div class="kpi">20</div><div class="muted">candles per timeframe</div></div>
+<div class="card"><div class="label">Hourly synchronized history</div><div class="kpi">125</div><div class="muted">historical states</div></div>
+</div>
+<h2>What this dashboard is doing</h2>
+<div class="grid2">
+<div class="card"><h3>🕯️ Candle behaviour</h3><p class="muted">Reads body size, range, direction, wicks, close location, compression and expansion.</p></div>
+<div class="card"><h3>📖 Candle story</h3><p class="muted">Turns individual candle behaviour into an easier sequence of phases such as range change, rejection and expansion.</p></div>
+<div class="card"><h3>📍 Price levels</h3><p class="muted">Shows meaningful level tests, holds, rejection, pullback and repeated tests.</p></div>
+<div class="card"><h3>🌐 Multi-timeframe</h3><p class="muted">Aligns 1m–4h exactly and attaches the latest completed 1d context in the hourly replay.</p></div>
+</div>
+<h2>Important</h2><div class="note">This is a descriptive research dashboard. Similarity and recurrence numbers describe historical structure; they are not trading signals, forecasts, probabilities, entries, targets or stops.</div>
+</section>
+
+<section id="current" class="page">
+<h2>Current candle stories</h2><div id="currentCards" class="grid2"><div class="card">Loading…</div></div>
+<h2>Current multi-timeframe view</h2><div id="mtfCurrent"></div>
+</section>
+
+<section id="stories" class="page">
+<h2>Current story by timeframe</h2><div id="storyTable"></div>
+<h2>Historical story matches</h2><div id="matchTable"></div>
+</section>
+
+<section id="history" class="page">
+<h2>Historical synchronized replay</h2>
+<div class="grid">
+<div class="card"><div class="label">Reference</div><div class="kpi">1h</div></div>
+<div class="card"><div class="label">Core synchronization</div><div class="kpi">1m–4h</div></div>
+<div class="card"><div class="label">Higher context</div><div class="kpi">1d</div></div>
+<div class="card"><div class="label">Alignment gap</div><div class="kpi">0 ms</div></div>
+</div>
+<h2>Top historical synchronized states</h2><div id="historyTable"></div>
+<h2>Story similarity map</h2><img class="chart" src="charts/candle_story_mtf_history_map_1h.png" alt="Historical synchronized story similarity map">
+</section>
+
+<section id="levels" class="page">
+<h2>Current price-level behaviour</h2><div id="levelTable"></div>
+<h2>Price-level research map</h2><img class="chart" src="charts/price_level_map.png" alt="Price level behaviour map">
+</section>
+
+<section id="transitions" class="page">
+<h2>Current candle transitions</h2><div id="transitionTable"></div>
+<h2>Research maps</h2><div class="grid2">
+<div class="card"><h3>Candle transition map</h3><img class="chart" src="charts/candle_transition_map.png" alt="Candle transition map"></div>
+<div class="card"><h3>Story transition map</h3><img class="chart" src="charts/candle_story_mtf_map.png" alt="Multi-timeframe story map"></div>
+</div>
+</section>
+</main>
+<script>
+const base='charts/';
+async function csv(file){const r=await fetch(base+file);if(!r.ok)throw Error(file+' not found');const t=await r.text();return parseCSV(t)}
+function parseCSV(s){const lines=s.trim().split(/\r?\n/);if(!lines.length)return[];const p=l=>{let a=[],c='',q=false;for(let i=0;i<l.length;i++){let x=l[i];if(x==='"'){if(q&&l[i+1]==='"'){c+='"';i++}else q=!q}else if(x===','&&!q){a.push(c);c=''}else c+=x}a.push(c);return a};const h=p(lines[0]);return lines.slice(1).map(l=>{const v=p(l),o={};h.forEach((k,i)=>o[k]=v[i]??'');return o})}
+function esc(x){return String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;')}
+function phases(s){return esc(s).split(' -&gt; ').map(x=>'<span class="phase">'+x+'</span>').join(' → ')}
+function table(rows,cols){if(!rows.length)return '<div class="card muted">No data available.</div>';return '<div style="overflow:auto"><table><thead><tr>'+cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(r[c])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>'}
+async function load(){
+try{
+const [cur,mtf,matches,levels,trans]=await Promise.all([
+csv('candle_story_current.csv'),csv('candle_story_mtf_history_current_1h.csv'),csv('candle_story_mtf_history_matches_1h.csv'),csv('price_level_current.csv'),csv('candle_transition_current.csv')
+]);
+document.getElementById('currentCards').innerHTML=cur.map(r=>'<div class="card tf"><h3>'+esc(r.timeframe)+' <span class="badge">20 candles</span></h3><div class="story">'+phases(r.story)+'</div><p class="muted">Interactions: '+esc(r.interaction_count)+' · Rejections: '+esc(r.rejection_count)+' · Pullbacks: '+esc(r.pullback_count)+' · Repeated tests: '+esc(r.repeated_level_tests)+' · Expansions after interaction: '+esc(r.reaction_expansion_count)+'</p></div>').join('');
+document.getElementById('mtfCurrent').innerHTML=table(mtf,['timeframe','role','current_family_story','research_note']);
+document.getElementById('storyTable').innerHTML=table(cur,['timeframe','story','story_event_count','story_phase_count']);
+document.getElementById('matchTable').innerHTML=table(matches.slice(0,25),['rank','reference_timestamp','combined_similarity','cross_tf_candle_similarity','cross_tf_story_similarity']);
+document.getElementById('historyTable').innerHTML=table(matches.slice(0,25),['rank','reference_timestamp','combined_similarity','cross_tf_candle_similarity','cross_tf_story_similarity','alignment_status']);
+document.getElementById('levelTable').innerHTML=table(levels,['timeframe','level_count','interaction_count','hold_count','rejection_count','pullback_count','repeated_level_tests','reaction_expansion_count','story']);
+document.getElementById('transitionTable').innerHTML=table(trans,['timeframe','transition_type','first_direction','second_direction','direction_shift','range_shift']);
+}catch(e){document.querySelector('main').insertAdjacentHTML('afterbegin','<div class="error">Some research files could not be loaded: '+esc(e.message)+'</div>')}
+}
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById(b.dataset.page).classList.add('active')});
+load();
+</script>
+</body>
+</html>
