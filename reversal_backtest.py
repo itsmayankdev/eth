@@ -135,6 +135,40 @@ def plot_examples(df: pd.DataFrame, events: list[dict], out: Path, tf: str, thre
     fig.savefig(out/f"reversal_examples_{tf}_{threshold:.2f}.png",dpi=150)
     plt.close(fig)
 
+def plot_comparison(df: pd.DataFrame, events: list[dict], matches: pd.DataFrame, out: Path, tf: str, threshold: float):
+    if not events or matches.empty:
+        return
+    latest = events[-1]
+    mm = matches[matches["event_id"] == latest["event_id"]].head(3)
+    if mm.empty:
+        return
+    chosen = [latest]
+    byid = {e["event_id"]: e for e in events}
+    for mid in mm["match_event_id"]:
+        if str(mid) in byid:
+            chosen.append(byid[str(mid)])
+    fig, axes = plt.subplots(len(chosen), 1, figsize=(12, 3.4 * len(chosen)), squeeze=False)
+    for ax, e in zip(axes[:, 0], chosen):
+        s = max(0, e["pre_window_start"] - 5)
+        end = min(len(df)-1, e["confirmation_index"] + max(HORIZONS))
+        o=df.open.iloc[s:end+1].to_numpy(float); h=df.high.iloc[s:end+1].to_numpy(float)
+        l=df.low.iloc[s:end+1].to_numpy(float); c=df.close.iloc[s:end+1].to_numpy(float)
+        base=float(c[0])
+        for k in range(len(o)):
+            ax.plot([k,k],[l[k]/base,h[k]/base],linewidth=.8)
+            ax.plot([k,k],[o[k]/base,c[k]/base],linewidth=4)
+        pivot_x=e["pivot_index"]-s; confirm_x=e["confirmation_index"]-s
+        ax.axvline(pivot_x,linestyle="--",linewidth=1.4)
+        ax.axvline(confirm_x,linestyle=":",linewidth=1.4)
+        ax.set_ylabel("Normalized price")
+        label = "CURRENT / latest" if e["event_id"] == latest["event_id"] else "HISTORICAL MATCH"
+        ax.set_title(f'{label} | {e["event_id"]} | {e["direction"]} | pivot → confirmation: {e["confirmation_delay_candles"]} candles | +20 signed={e["signed_return_20"]:.2f}%')
+        ax.grid(alpha=.2)
+    fig.suptitle(f"{tf} | reversal structure comparison | {threshold:.2f}% threshold", y=.995)
+    fig.tight_layout()
+    fig.savefig(out/f"reversal_comparison_{tf}_{threshold:.2f}.png", dpi=150)
+    plt.close(fig)
+
 def plot_outcomes(summary: pd.DataFrame, out: Path, tf: str, threshold: float):
     if summary.empty:return
     fig,ax=plt.subplots(figsize=(10,5))
@@ -172,7 +206,7 @@ def run(output_dir="charts",timeframes=TIMEFRAMES,thresholds=THRESHOLDS):
                     "negative_count":int((vals<0).sum()) if len(vals) else 0,
                     "positive_share_pct":float((vals>0).mean()*100) if len(vals) else np.nan})
             sm=pd.DataFrame(rows); sm.to_csv(out/f"reversal_summary_{stem}.csv",index=False)
-            plot_examples(df,events,out,tf,threshold); plot_outcomes(sm,out,tf,threshold)
+            plot_examples(df,events,out,tf,threshold); plot_comparison(df,events,matches,out,tf,threshold); plot_outcomes(sm,out,tf,threshold)
             sim_count=0
             if not matches.empty:
                 sim_count=int((matches.similarity>=0.75).sum())
