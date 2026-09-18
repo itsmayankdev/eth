@@ -1,124 +1,84 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ETH Candle Research Dashboard</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ETH Behaviour Dashboard</title>
 <style>
-:root{--bg:#f5f7fb;--card:#fff;--text:#172033;--muted:#667085;--line:#e6eaf0;--accent:#2563eb;--soft:#eef4ff;--green:#16845b;--amber:#b76e00}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--text)}
-header{background:#111827;color:#fff;padding:26px 28px}header .wrap,.wrap{max-width:1400px;margin:auto}
-h1{margin:0;font-size:28px}header p{margin:7px 0 0;color:#cbd5e1}
-nav{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
-nav .wrap{display:flex;gap:8px;overflow:auto;padding:10px 14px}
-button{border:0;background:transparent;padding:10px 14px;border-radius:9px;font-weight:600;color:var(--muted);cursor:pointer}
-button.active,button:hover{background:var(--soft);color:var(--accent)}
-main{padding:24px 16px 60px}.page{display:none}.page.active{display:block}
-.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:0 2px 8px rgba(16,24,40,.03)}
-.kpi{font-size:28px;font-weight:750;margin-top:6px}.label{font-size:13px;color:var(--muted)}h2{font-size:20px;margin:28px 0 13px}h3{margin:0 0 8px;font-size:16px}
-.tf{border-left:4px solid var(--accent)}.tf .story{font-size:13px;line-height:1.65;color:#344054}
-.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:var(--soft);color:var(--accent);font-size:12px;font-weight:700}
-table{width:100%;border-collapse:collapse;font-size:13px;background:#fff;border-radius:12px;overflow:hidden}
-th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);vertical-align:top}th{background:#f8fafc;color:#475467;position:sticky;top:53px}
-.muted{color:var(--muted)}.note{background:#fff9e8;border:1px solid #f2dfad;border-radius:12px;padding:14px;color:#664d03;font-size:13px}
-img.chart{width:100%;border:1px solid var(--line);border-radius:12px;background:#fff}
-.storyline{line-height:1.9}.phase{display:inline-block;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:7px;padding:4px 7px;margin:3px;font-size:12px}
-.search{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;margin-bottom:12px}
-.error{color:#b42318;background:#fff1f0;padding:12px;border-radius:10px}
-@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
-@media(max-width:600px){.grid{grid-template-columns:1fr}header{padding:20px 16px}}
-</style>
-</head>
-<body>
-<header><div class="wrap"><h1>ETH Candle Behaviour Research</h1><p>One simple view of the ETH/USDT candle, story, level and multi-timeframe research.</p></div></header>
-<nav><div class="wrap">
-<button class="tab active" data-page="overview">Overview</button>
-<button class="tab" data-page="current">Current</button>
-<button class="tab" data-page="stories">Stories</button>
-<button class="tab" data-page="history">History</button>
-<button class="tab" data-page="levels">Levels</button>
-<button class="tab" data-page="transitions">Transitions</button>
-</div></nav>
+:root{--bg:#f4f6fa;--card:#fff;--text:#182230;--muted:#667085;--line:#e4e7ec;--blue:#2563eb;--bluebg:#eff6ff;--green:#15803d;--greenbg:#ecfdf3;--amber:#b45309;--amberbg:#fffbeb;--red:#b42318;--redbg:#fff1f0}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;line-height:1.5}
+header{background:#111827;color:#fff;padding:25px 20px}.wrap{max-width:1400px;margin:auto}h1{margin:0;font-size:28px}header p{margin:5px 0 0;color:#cbd5e1}
+nav{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}.tabs{display:flex;gap:6px;overflow:auto;padding:9px 14px}.tab{border:0;background:transparent;padding:10px 15px;border-radius:9px;color:#475467;font-weight:650;cursor:pointer}.tab.active{background:var(--bluebg);color:var(--blue)}
+main{padding:22px 16px 60px}.page{display:none}.page.active{display:block}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}.big{font-size:27px;font-weight:800}.small{font-size:13px;color:var(--muted)}h2{margin:26px 0 12px;font-size:20px}h3{margin:0 0 7px;font-size:16px}
+.kpi{font-size:13px;color:var(--muted)}.answer{font-size:17px;font-weight:700;margin:4px 0 7px}.blue{color:var(--blue)}.green{color:var(--green)}.amber{color:var(--amber)}
+.story{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:10px}.phase{background:#f8fafc;border:1px solid #dfe3e8;padding:5px 8px;border-radius:8px;font-size:12px}.arrow{color:#98a2b3}
+table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:#f8fafc}.scroll{overflow:auto}.tip{background:var(--bluebg);border:1px solid #cfe0ff;padding:14px;border-radius:12px}.warning{background:var(--amberbg);border:1px solid #f2dfad;padding:13px;border-radius:12px;color:#7a4d00}
+img{max-width:100%;border:1px solid var(--line);border-radius:12px}.legend{display:flex;gap:10px;flex-wrap:wrap}.legend span{padding:5px 8px;border-radius:8px;background:#f8fafc;font-size:12px}
+@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}@media(max-width:600px){.grid{grid-template-columns:1fr}h1{font-size:23px}}
+</style></head><body>
+<header><div class="wrap"><h1>ETH Candle Behaviour Dashboard</h1><p>Simple view: what the candles are doing, what changed, and what similar history looked like.</p></div></header>
+<nav><div class="wrap tabs"><button class="tab active" data-p="home">Home</button><button class="tab" data-p="now">What is happening now?</button><button class="tab" data-p="stories">Candle stories</button><button class="tab" data-p="history">Past examples</button><button class="tab" data-p="levels">Price levels</button><button class="tab" data-p="guide">How to read this</button></div></nav>
 <main class="wrap">
-<section id="overview" class="page active">
-<div class="grid">
-<div class="card"><div class="label">Asset</div><div class="kpi">ETH/USDT</div></div>
-<div class="card"><div class="label">Timeframes</div><div class="kpi">8</div><div class="muted">1m → 1d</div></div>
-<div class="card"><div class="label">Current window</div><div class="kpi">20</div><div class="muted">candles per timeframe</div></div>
-<div class="card"><div class="label">Hourly synchronized history</div><div class="kpi">125</div><div class="muted">historical states</div></div>
-</div>
-<h2>What this dashboard is doing</h2>
-<div class="grid2">
-<div class="card"><h3>🕯️ Candle behaviour</h3><p class="muted">Reads body size, range, direction, wicks, close location, compression and expansion.</p></div>
-<div class="card"><h3>📖 Candle story</h3><p class="muted">Turns individual candle behaviour into an easier sequence of phases such as range change, rejection and expansion.</p></div>
-<div class="card"><h3>📍 Price levels</h3><p class="muted">Shows meaningful level tests, holds, rejection, pullback and repeated tests.</p></div>
-<div class="card"><h3>🌐 Multi-timeframe</h3><p class="muted">Aligns 1m–4h exactly and attaches the latest completed 1d context in the hourly replay.</p></div>
-</div>
-<h2>Important</h2><div class="note">This is a descriptive research dashboard. Similarity and recurrence numbers describe historical structure; they are not trading signals, forecasts, probabilities, entries, targets or stops.</div>
+<section id="home" class="page active">
+<div class="grid"><div class="card"><div class="small">Market</div><div class="big">ETH / USDT</div></div><div class="card"><div class="small">Timeframes studied</div><div class="big">8</div><div class="small">1m, 3m, 5m, 15m, 30m, 1h, 4h, 1d</div></div><div class="card"><div class="small">Candles in each current view</div><div class="big">20</div><div class="small">per timeframe</div></div><div class="card"><div class="small">Synchronized past states</div><div class="big">125</div><div class="small">hourly historical states</div></div></div>
+<h2>Start here</h2><div class="grid2">
+<div class="card"><h3>👀 What is happening now?</h3><p>Go here first. It translates the technical measurements into plain English for each timeframe.</p></div>
+<div class="card"><h3>📖 What is the candle story?</h3><p>It explains the order of events inside the last 20 candles — for example, quiet movement → bigger candles → rejection → expansion.</p></div>
+<div class="card"><h3>🕰️ What happened in the past?</h3><p>Shows historical ETH situations that had similar candle behaviour across several timeframes.</p></div>
+<div class="card"><h3>📍 What happened around levels?</h3><p>Shows whether price repeatedly tested an area, was rejected, held it, or moved away after the test.</p></div></div>
+<h2>One important note</h2><div class="warning">This dashboard describes market behaviour. It does not predict the next move and does not create buy/sell signals.</div>
 </section>
-
-<section id="current" class="page">
-<h2>Current candle stories</h2><div id="currentCards" class="grid2"><div class="card">Loading…</div></div>
-<h2>Current multi-timeframe view</h2><div id="mtfCurrent"></div>
-</section>
-
-<section id="stories" class="page">
-<h2>Current story by timeframe</h2><div id="storyTable"></div>
-<h2>Historical story matches</h2><div id="matchTable"></div>
-</section>
-
-<section id="history" class="page">
-<h2>Historical synchronized replay</h2>
-<div class="grid">
-<div class="card"><div class="label">Reference</div><div class="kpi">1h</div></div>
-<div class="card"><div class="label">Core synchronization</div><div class="kpi">1m–4h</div></div>
-<div class="card"><div class="label">Higher context</div><div class="kpi">1d</div></div>
-<div class="card"><div class="label">Alignment gap</div><div class="kpi">0 ms</div></div>
-</div>
-<h2>Top historical synchronized states</h2><div id="historyTable"></div>
-<h2>Story similarity map</h2><img class="chart" src="charts/candle_story_mtf_history_map_1h.png" alt="Historical synchronized story similarity map">
-</section>
-
-<section id="levels" class="page">
-<h2>Current price-level behaviour</h2><div id="levelTable"></div>
-<h2>Price-level research map</h2><img class="chart" src="charts/price_level_map.png" alt="Price level behaviour map">
-</section>
-
-<section id="transitions" class="page">
-<h2>Current candle transitions</h2><div id="transitionTable"></div>
-<h2>Research maps</h2><div class="grid2">
-<div class="card"><h3>Candle transition map</h3><img class="chart" src="charts/candle_transition_map.png" alt="Candle transition map"></div>
-<div class="card"><h3>Story transition map</h3><img class="chart" src="charts/candle_story_mtf_map.png" alt="Multi-timeframe story map"></div>
-</div>
+<section id="now" class="page"><h2>What is happening now?</h2><div class="tip">Think of this page as the <b>English translation</b> of the candle data. You do not need to understand the numbers first.</div><div id="nowCards" class="grid2"></div><h2>Across all timeframes</h2><div id="crossSummary" class="card"></div></section>
+<section id="stories" class="page"><h2>Current candle stories</h2><p class="small">Read each story from left to right. Each box is a phase in the last 20 candles.</p><div id="storiesCards" class="grid2"></div><h2>What the words mean</h2><div id="dictionary" class="grid2"></div></section>
+<section id="history" class="page"><h2>Past examples that resemble the current situation</h2><div class="tip">These are historical similarities, not forecasts. A higher similarity simply means the measured candle/story structure was more alike.</div><div id="historyTable"></div><h2>Historical similarity map</h2><img src="charts/candle_story_mtf_history_map_1h.png" alt="Historical similarity map"></section>
+<section id="levels" class="page"><h2>What price levels are doing now</h2><div id="levelCards" class="grid2"></div><h2>Simple explanation</h2><div class="card"><p><b>Level test</b> = price came back to an important area.</p><p><b>Rejection</b> = price touched an area and candles moved away from it.</p><p><b>Hold</b> = price stayed around the area instead of clearly leaving it.</p><p><b>Pullback</b> = price moved away and then came back toward the area.</p><p><b>Repeated test</b> = the same area was visited multiple times.</p><p><b>Expansion after test</b> = candle ranges became larger after an interaction.</p></div><h2>Price-level research map</h2><img src="charts/price_level_map.png" alt="Price level research map"></section>
+<section id="guide" class="page"><h2>How to read the dashboard</h2><div class="grid2">
+<div class="card"><h3>1. Start with "What is happening now?"</h3><p>Look for whether candles are becoming larger/smaller, changing direction, testing areas, or showing rejection.</p></div>
+<div class="card"><h3>2. Read the story left → right</h3><p>Do not focus on one word. The order matters. A story is a sequence of candle behaviours.</p></div>
+<div class="card"><h3>3. Compare timeframes</h3><p>Short timeframes describe faster behaviour. Longer timeframes describe the broader candle structure around the same historical point.</p></div>
+<div class="card"><h3>4. Use history as examples</h3><p>Historical matches show what similar structures looked like before. They do not tell us what must happen next.</p></div></div>
+<h2>Plain-English dictionary</h2><div id="dictionary2" class="grid2"></div>
 </section>
 </main>
 <script>
-const base='charts/';
-async function csv(file){const r=await fetch(base+file);if(!r.ok)throw Error(file+' not found');const t=await r.text();return parseCSV(t)}
-function parseCSV(s){const lines=s.trim().split(/\r?\n/);if(!lines.length)return[];const p=l=>{let a=[],c='',q=false;for(let i=0;i<l.length;i++){let x=l[i];if(x==='"'){if(q&&l[i+1]==='"'){c+='"';i++}else q=!q}else if(x===','&&!q){a.push(c);c=''}else c+=x}a.push(c);return a};const h=p(lines[0]);return lines.slice(1).map(l=>{const v=p(l),o={};h.forEach((k,i)=>o[k]=v[i]??'');return o})}
+const B='charts/';
+async function csv(f){const r=await fetch(B+f);if(!r.ok)throw Error(f);return parse(await r.text())}
+function parse(s){const ls=s.trim().split(/\r?\n/);const row=l=>{let a=[],c='',q=false;for(let i=0;i<l.length;i++){let x=l[i];if(x==='"'){if(q&&l[i+1]==='"'){c+='"';i++}else q=!q}else if(x===','&&!q){a.push(c);c=''}else c+=x}a.push(c);return a};const h=row(ls[0]);return ls.slice(1).map(l=>{let v=row(l),o={};h.forEach((k,i)=>o[k]=v[i]??'');return o})}
 function esc(x){return String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;')}
-function phases(s){return esc(s).split(' -&gt; ').map(x=>'<span class="phase">'+x+'</span>').join(' → ')}
-function table(rows,cols){if(!rows.length)return '<div class="card muted">No data available.</div>';return '<div style="overflow:auto"><table><thead><tr>'+cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(r[c])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>'}
+const dict={
+'INITIAL_BALANCED_BEHAVIOUR':'The candles start fairly mixed; there is no strong one-sided character at the beginning.',
+'INITIAL_BULLISH_BIAS':'The earlier part of the window has more upward candle behaviour.',
+'RANGE_EXPANSION':'Candle ranges are getting bigger — movement is becoming wider.',
+'RANGE_COMPRESSION':'Candle ranges are getting smaller — movement is becoming tighter.',
+'BODY_EXPANSION':'Candle bodies are getting bigger — closes are covering more distance.',
+'BODY_COMPRESSION':'Candle bodies are getting smaller — candles are becoming less forceful in size.',
+'DIRECTIONAL_SHIFT':'The balance between upward and downward candles changed.',
+'DIRECTION_CHANGE_IN_CHARACTER':'The candle behaviour changed direction/character inside the window.',
+'COUNTERMOVE_AND_RENEWAL':'A move in the opposite direction appeared, followed by renewed movement.',
+'REJECTION_CLUSTER':'Several interactions show candles moving away from a tested area.',
+'HOLD_CLUSTER':'Several interactions show price staying around a tested area.',
+'PULLBACK_CLUSTER':'Price moved away and then returned toward a tested area.',
+'REPEATED_TEST_CLUSTER':'The same type of area was tested multiple times.',
+'LEVEL_INTERACTION_CLUSTER':'The candles repeatedly interacted with a meaningful price area.',
+'EXPANSION_AFTER_TEST':'Candle ranges became larger after a level interaction.',
+'LEVEL_TEST':'Price came back to a meaningful area.',
+'REJECTION':'Price touched an area and then moved away.',
+'HOLD':'Price stayed around the area.',
+'PULLBACK':'Price returned toward the area after moving away.'
+};
+function explain(story){let s=story.split(' -> ');let first=s[0],last=s[s.length-1];let parts=[];if(s.some(x=>x.includes('COMPRESSION')))parts.push('Candle movement became tighter at one or more points.');if(s.some(x=>x.includes('EXPANSION')))parts.push('Candle movement became wider at one or more points.');if(s.some(x=>x.includes('DIRECTION')))parts.push('The balance between upward and downward candles changed.');if(s.some(x=>x.includes('REJECTION')))parts.push('There were signs of rejection around tested areas.');if(s.some(x=>x.includes('HOLD')))parts.push('There were periods where price stayed around an area.');if(s.some(x=>x.includes('REPEATED_TEST')))parts.push('Some areas were tested repeatedly.');return parts.length?parts.slice(0,3).join(' '):'The window shows mixed candle behaviour without a single dominant event.'}
+function storyHTML(s){return '<div class="story">'+s.split(' -> ').map((x,i)=>'<span class="phase" title="'+esc(dict[x]||x)+'">'+esc(dict[x]?x.replaceAll('_',' '):x)+'</span>'+(i<s.split(' -> ').length-1?'<span class="arrow">→</span>':'')).join('')+'</div>'}
+function table(rows,cols){if(!rows.length)return '<div class="card">No data available.</div>';return '<div class="scroll"><table><thead><tr>'+cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(r[c])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>'}
 async function load(){
-const files=[
-['cur','candle_story_current.csv'],['mtf','candle_story_mtf_history_current_1h.csv'],['matches','candle_story_mtf_history_matches_1h.csv'],['levels','price_level_current.csv'],['trans','candle_transition_current.csv']
-];
-const settled=await Promise.all(files.map(async ([key,file])=>{try{return [key,await csv(file),null]}catch(e){return [key,[],file]}}));
-const d=Object.fromEntries(settled.map(x=>[x[0],x[1]]));
-const missing=settled.filter(x=>x[2]).map(x=>x[2]);
-if(missing.length){document.querySelector('main').insertAdjacentHTML('afterbegin','<div class="note">Dashboard loaded. Some optional research files are not currently published: '+missing.map(esc).join(', ')+'. The available sections still work.</div>')}
-const cur=d.cur,mtf=d.mtf,matches=d.matches,levels=d.levels,trans=d.trans;
-document.getElementById('currentCards').innerHTML=cur.length?cur.map(r=>'<div class="card tf"><h3>'+esc(r.timeframe)+' <span class="badge">20 candles</span></h3><div class="story">'+phases(r.story)+'</div><p class="muted">Interactions: '+esc(r.interaction_count)+' · Rejections: '+esc(r.rejection_count)+' · Pullbacks: '+esc(r.pullback_count)+' · Repeated tests: '+esc(r.repeated_level_tests)+' · Expansions after interaction: '+esc(r.reaction_expansion_count)+'</p></div>').join(''):'<div class="card muted">Current story data unavailable.</div>';
-document.getElementById('mtfCurrent').innerHTML=table(mtf,['timeframe','role','current_family_story','research_note']);
-document.getElementById('storyTable').innerHTML=table(cur,['timeframe','story','story_event_count','story_phase_count']);
-document.getElementById('matchTable').innerHTML=table(matches.slice(0,25),['rank','reference_timestamp','combined_similarity','cross_tf_candle_similarity','cross_tf_story_similarity']);
-document.getElementById('historyTable').innerHTML=table(matches.slice(0,25),['rank','reference_timestamp','combined_similarity','cross_tf_candle_similarity','cross_tf_story_similarity','alignment_status']);
-document.getElementById('levelTable').innerHTML=table(levels,['timeframe','level_count','interaction_count','hold_count','rejection_count','pullback_count','repeated_level_tests','reaction_expansion_count','story']);
-document.getElementById('transitionTable').innerHTML=trans.length?table(trans,['timeframe','transition_type','first_direction','second_direction','direction_shift','range_shift']):'<div class="card muted">The transition CSV is not currently published in GitHub, so this section is waiting for that research output.</div>';
+let [cur,mtf,matches,levels]=await Promise.all([
+csv('candle_story_current.csv'),csv('candle_story_mtf_history_current_1h.csv'),csv('candle_story_mtf_history_matches_1h.csv'),csv('price_level_current.csv')]);
+document.getElementById('nowCards').innerHTML=cur.map(r=>'<div class="card"><h3>'+esc(r.timeframe)+' <span class="small">last 20 candles</span></h3><div class="answer">'+esc(explain(r.story))+'</div><div class="small"><b>Story:</b> '+esc(r.story.replaceAll('_',' '))+'</div></div>').join('');
+let shifts=cur.map(r=>Number(r.direction_shift)||0), ranges=cur.map(r=>Number(r.range_shift)||0);let up=cur.filter(r=>Number(r.direction_shift)>0.1).map(r=>r.timeframe),down=cur.filter(r=>Number(r.direction_shift)<-0.1).map(r=>r.timeframe);
+document.getElementById('crossSummary').innerHTML='<h3>Simple cross-timeframe summary</h3><p><b>Direction:</b> '+(up.length?'More upward behaviour is appearing on '+up.join(', ')+'. ':'')+(down.length?'More downward behaviour is appearing on '+down.join(', ')+'. ':'')+(!up.length&&!down.length?'No large direction shift is visible in these measurements.':'')+'</p><p><b>Range:</b> '+(ranges.filter(x=>x>0.05).length?'Some timeframes show wider candle movement. ':'')+(ranges.filter(x=>x<-0.05).length?'Some timeframes show tighter candle movement. ':'')+'This is a description of the measured window.</p>';
+document.getElementById('storiesCards').innerHTML=cur.map(r=>'<div class="card"><h3>'+esc(r.timeframe)+'</h3>'+storyHTML(r.story)+'<p class="small">'+esc(explain(r.story))+'</p></div>').join('');
+let keys=Object.keys(dict);document.getElementById('dictionary').innerHTML=keys.slice(0,10).map(k=>'<div class="card"><b>'+esc(k.replaceAll('_',' '))+'</b><p class="small">'+esc(dict[k])+'</p></div>').join('');
+document.getElementById('dictionary2').innerHTML=keys.map(k=>'<div class="card"><b>'+esc(k.replaceAll('_',' '))+'</b><p class="small">'+esc(dict[k])+'</p></div>').join('');
+document.getElementById('historyTable').innerHTML=table(matches.slice(0,25),['rank','reference_timestamp','combined_similarity','cross_tf_story_similarity','alignment_status']);
+document.getElementById('levelCards').innerHTML=levels.map(r=>'<div class="card"><h3>'+esc(r.timeframe)+'</h3><div class="answer">'+esc(r.interaction_count)+' level interactions were detected.</div><p class="small">Rejections: '+esc(r.rejection_count)+' · Holds: '+esc(r.hold_count)+' · Pullbacks: '+esc(r.pullback_count)+' · Repeated tests: '+esc(r.repeated_level_tests)+'</p><p><b>In plain English:</b> '+esc(levelExplain(r))+'</p></div>').join('');
 }
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById(b.dataset.page).classList.add('active')});
-load();
-</script>
-</body>
-</html>
+function levelExplain(r){let a=[];if(+r.rejection_count)a.push('some tests were rejected');if(+r.hold_count)a.push('some areas held');if(+r.pullback_count)a.push('there were returns toward tested areas');if(+r.repeated_level_tests)a.push('some areas were visited repeatedly');return a.length?a.join(', ')+'.':'few level interactions were detected.'}
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById(b.dataset.p).classList.add('active')});
+load().catch(e=>{document.querySelector('main').insertAdjacentHTML('afterbegin','<div class="warning">Some dashboard data could not be loaded: '+esc(e.message)+'.</div>')});
+</script></body></html>
